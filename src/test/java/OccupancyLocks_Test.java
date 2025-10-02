@@ -4,33 +4,22 @@ import static org.junit.Assert.*;
 public class OccupancyLocks_Test {
 
     @Test
-    public void twoTrainsCannotShareASection() {
+    public void cannotAddTwoTrainsIntoSameEntrySection() {
         Interlocking sys = new InterlockingImpl();
-
-        // TODO: replace with your real API from Interlocking.java
-        // e.g., sys.addTrain("P1", /*enter at*/ 1); sys.addTrain("F7", 1);
-        // For now, keep placeholders so file compiles once you wire real calls.
-
-        // Pseudocode (adapt to API):
-        // sys.placeTrain("T1", /*section*/ 4);
-        // boolean t2Placed = sys.tryPlaceTrain("T2", /*section*/ 4);
-        // assertFalse("Second train must not be allowed into occupied section", t2Placed);
-
-        assertTrue(true); // remove after wiring real calls
+        // Valid southbound example: enter at 1, dest 4 (adjust if your map differs)
+        sys.addTrain("P1", 1, 4);
+        try {
+            sys.addTrain("P2", 1, 8);
+            fail("should not allow second train in same section");
+        } catch (IllegalStateException expected) { /* ok */ }
     }
 
     @Test
-    public void moveDeniedWhenTargetOccupied() {
+    public void getSectionAndGetTrainReflectState() {
         Interlocking sys = new InterlockingImpl();
-
-        // Pseudocode (adapt):
-        // sys.placeTrain("A", 3);
-        // sys.placeTrain("B", 4);
-        // sys.requestMove("A", /*to*/ 4);   // should be denied
-        // sys.tick();
-        // assertEquals(3, sys.whereIs("A"));
-        // assertEquals(4, sys.whereIs("B"));
-
-        assertTrue(true); // remove after wiring real calls
+        sys.addTrain("X", 3, 8);
+        assertEquals("X", sys.getSection(3));
+        assertEquals(3, sys.getTrain("X"));
+        assertNull(sys.getSection(2));
     }
 }
