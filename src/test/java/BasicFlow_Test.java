@@ -5,6 +5,6 @@ public class BasicFlow_Test {
     @Test
     public void projectCompilesAndRuns() {
         Interlocking impl = new InterlockingImpl();
-        assertNotNull(impl);
+        assertNotNull("InterlockingImpl should instantiate", impl);
     }
 }
