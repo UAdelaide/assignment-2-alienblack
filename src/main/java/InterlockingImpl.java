@@ -51,6 +51,12 @@ public class InterlockingImpl implements Interlocking {
     private boolean isSectionFree(int sectionId) {
         return !sectionOwner.containsKey(sectionId);
     }
+    private static boolean isPassenger(String name) { return name != null && name.startsWith("P"); }
+    private static boolean isFreight(String name)   { return name != null && name.startsWith("F"); }
+
+    // Crossing targets where priority applies (adjust if your map changes)
+    private static final Set<Integer> CROSSING_SECTIONS = Set.of(2);
+
     private void occupy(int sectionId, String trainName) {
         sectionOwner.put(sectionId, trainName);
         trainSection.put(trainName, sectionId);
@@ -126,17 +132,49 @@ public class InterlockingImpl implements Interlocking {
         }
 
         // resolve conflicts: if multiple claim same target, deny all (phase-1 rule)
+        // resolve conflicts: if multiple claim same target, deny all (phase-1 rule)
         int moved = 0;
-        for (Map.Entry<String,Integer> e : desired.entrySet()) {
-            String t = e.getKey();
-            int to = e.getValue();
-            if (targetClaims.getOrDefault(to, List.of()).size() > 1) continue;
+
+// First, resolve conflicts per target
+        Map<String,Integer> granted = new HashMap<>();
+        for (Map.Entry<Integer,List<String>> entry : targetClaims.entrySet()) {
+            int target = entry.getKey();
+            List<String> claimants = entry.getValue();
+
+            if (claimants.size() == 1) {
+                // single claimant → grant
+                String t = claimants.get(0);
+                granted.put(t, target);
+                continue;
+            }
+
+            // Multiple claimants
+            if (CROSSING_SECTIONS.contains(target)) {
+                // Passenger-first policy at crossing
+                String passenger = null;
+                for (String c : claimants) if (isPassenger(c)) { passenger = c; break; }
+                if (passenger != null) {
+                    granted.put(passenger, target); // passenger wins
+                    // others denied
+                    continue;
+                }
+            }
+            // otherwise deny all for this target (no movement)
+        }
+
+// Apply granted moves atomically
+        for (Map.Entry<String,Integer> g : granted.entrySet()) {
+            String t = g.getKey();
+            int to = g.getValue();
             int from = trainSection.get(t);
+            // double-check still free (paranoia)
+            if (!isSectionFree(to) && !Objects.equals(sectionOwner.get(to), t)) continue;
             vacate(from);
             occupy(to, t);
             moved++;
         }
         return moved;
+
     }
 
     @Override
