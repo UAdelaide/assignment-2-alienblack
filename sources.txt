@@ -1,5 +1,6 @@
 src/test/java/OccupancyLocks_Test.java
 src/test/java/BasicFlow_Test.java
+src/test/java/PriorityAndCrossing_Test.java
 src/test/java/RoutingRules_Test.java
 src/test/java/MovePhase1_Test.java
 src/main/java/Main.java
