@@ -17,11 +17,13 @@ public class InterlockingImpl implements Interlocking {
     // ---- Minimal track graph for phase-1 tests (extend later)
     private static final Map<Integer, List<Integer>> NEXT_HOPS = new HashMap<>();
     static {
-        // example path 1 -> 2 -> 4 (4 acts like an exit)
-        NEXT_HOPS.put(1, List.of(2));
-        NEXT_HOPS.put(2, List.of(4));
-        NEXT_HOPS.put(3, List.of(2));   // allow 3 -> 2
-        NEXT_HOPS.put(4, List.of());    // terminal
+        // Minimal yet useful graph for tests:
+        // 1 <-> 2 -> 4 ; 3 -> 2 ; 4 terminal
+        NEXT_HOPS.clear();
+        NEXT_HOPS.put(1, List.of(2));     // 1 → 2
+        NEXT_HOPS.put(2, List.of(1, 4));  // 2 → 1 or 4
+        NEXT_HOPS.put(3, List.of(2));     // 3 → 2
+        NEXT_HOPS.put(4, List.of());      // terminal/exit
     }
 
     // ---- State
