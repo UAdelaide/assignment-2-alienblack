@@ -7,22 +7,18 @@ public class NoEnabledMoves_Test {
     public void nothingMovesWhenAllTargetsAlreadyTaken() {
         Interlocking sys = new InterlockingImpl();
 
-        // Step 1: occupy 2 legally
-        sys.addTrain("B", 3, 4);           // south entry 3, heading toward 4
-        sys.moveTrains(new String[]{"B"}); // B: 3 -> 2
+        // Step 1: freight northbound occupies section 7
+        sys.addTrain("F2", 11, 3);         // north entry 11 heading to exit 3
+        sys.moveTrains(new String[]{"F2"}); // 11 -> 7
 
-        // Step 2: occupy 4 legally (north entry)
-        sys.addTrain("C", 4, 2);           // north entry 4, any north exit (2 or 3) is fine
+        // Step 2: freight southbound waits at section 3 aiming for 11
+        sys.addTrain("F1", 3, 11);         // south entry 3 heading to 11
 
-        // Step 3: A legally enters at 1 and wants 2, but 2 is already taken by B
-        sys.addTrain("A", 1, 4);
-
-        // Now: A wants 2 (blocked by B), B wants 4 (blocked by C), C has no next.
-        int moved = sys.moveTrains(new String[]{"A","B","C"});
+        // Both trains are blocked: F1 wants 7 (occupied by F2), F2 wants 3 (occupied by F1).
+        int moved = sys.moveTrains(new String[]{"F1","F2"});
         assertEquals(0, moved);
 
-        assertEquals(1, sys.getTrain("A"));
-        assertEquals(2, sys.getTrain("B"));
-        assertEquals(4, sys.getTrain("C"));
+        assertEquals(3, sys.getTrain("F1"));
+        assertEquals(7, sys.getTrain("F2"));
     }
 }

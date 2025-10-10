@@ -15,19 +15,29 @@ public class InterlockingImpl implements Interlocking {
     private static final Set<Integer> NORTH_ENTRY = new HashSet<Integer>(Arrays.asList(4, 9, 10, 11));
     private static final Set<Integer> NORTH_EXIT  = new HashSet<Integer>(Arrays.asList(2, 3));
 
-    // ---- Minimal track graph for phase-1 tests (extend later)
+    // ---- Track graph (passenger + freight lines) ----
     private static final Map<Integer, List<Integer>> NEXT_HOPS = new HashMap<Integer, List<Integer>>();
+    private static final Set<Integer> PASSENGER_SECTIONS = new HashSet<Integer>(Arrays.asList(1, 2, 5, 6, 8, 9, 10));
+    private static final Set<Integer> FREIGHT_SECTIONS   = new HashSet<Integer>(Arrays.asList(3, 4, 7, 11));
+    private static final Map<Integer, Map<Integer, List<Integer>>> ROUTES;
+    private static final Set<Integer> FAIR_MERGE_TARGETS = new HashSet<Integer>(Arrays.asList(6, 7, 9));
     static {
-        // Minimal yet useful graph for tests:
-        // 1 <-> 2 -> 4 ; 3 -> 2 ; 4 terminal
-        NEXT_HOPS.put(1, Arrays.asList(2));                // 1 → 2
-        NEXT_HOPS.put(2, Arrays.asList(1, 4));             // 2 → 1 or 4
-        NEXT_HOPS.put(3, Arrays.asList(2));                // 3 → 2
-        NEXT_HOPS.put(4, Collections.<Integer>emptyList()); // terminal
+        NEXT_HOPS.put(1, Arrays.asList(5));
+        NEXT_HOPS.put(2, Arrays.asList(6));
+        NEXT_HOPS.put(3, Arrays.asList(4, 7));
+        NEXT_HOPS.put(4, Arrays.asList(3, 7));
+        NEXT_HOPS.put(5, Arrays.asList(1, 8, 9));
+        NEXT_HOPS.put(6, Arrays.asList(2, 9, 10));
+        NEXT_HOPS.put(7, Arrays.asList(3, 4, 11));
+        NEXT_HOPS.put(8, Arrays.asList(5));
+        NEXT_HOPS.put(9, Arrays.asList(5, 6));
+        NEXT_HOPS.put(10, Arrays.asList(6));
+        NEXT_HOPS.put(11, Arrays.asList(7));
+        ROUTES = computeRoutes();
     }
 
     // Crossing targets where priority applies (adjust if your map changes)
-    private static final Set<Integer> CROSSING_SECTIONS = new HashSet<Integer>(Arrays.asList(2));
+    private static final Set<Integer> CROSSING_SECTIONS = new HashSet<Integer>(Arrays.asList(4, 5));
 
     // ---- State
     /** sectionId -> trainName */
@@ -36,6 +46,10 @@ public class InterlockingImpl implements Interlocking {
     private final Map<String, Integer> trainSection = new HashMap<String, Integer>();
     /** trainName -> destination sectionId */
     private final Map<String, Integer> trainDest = new HashMap<String, Integer>();
+    /** trains that must exit on their next move */
+    private final Set<String> exitReady = new HashSet<String>();
+    /** fairness queues for non-crossing merges */
+    private final Map<Integer, LinkedList<String>> mergeQueues = new HashMap<Integer, LinkedList<String>>();
 
     // ---- Helpers (direction + validation)
     private static boolean isSouthbound(int entry, int dest) {
@@ -55,6 +69,8 @@ public class InterlockingImpl implements Interlocking {
     private static boolean isPassenger(String name) { return name != null && name.startsWith("P"); }
     @SuppressWarnings("unused")
     private static boolean isFreight(String name)   { return name != null && name.startsWith("F"); }
+    private static boolean isPassengerSection(int section) { return PASSENGER_SECTIONS.contains(section); }
+    private static boolean isFreightSection(int section)   { return FREIGHT_SECTIONS.contains(section); }
 
     // ---- Helpers (occupancy + movement)
     private boolean isSectionFree(int sectionId) {
@@ -63,22 +79,19 @@ public class InterlockingImpl implements Interlocking {
     private void occupy(int sectionId, String trainName) {
         sectionOwner.put(sectionId, trainName);
         trainSection.put(trainName, sectionId);
+        exitReady.remove(trainName);
     }
     private void vacate(int sectionId) {
         String t = sectionOwner.remove(sectionId);
-        if (t != null) trainSection.remove(t);
+        if (t != null) trainSection.put(t, Integer.valueOf(-1));
     }
     private int pickNext(int from, int dest) {
-        List<Integer> opts = NEXT_HOPS.containsKey(from) ? NEXT_HOPS.get(from) : Collections.<Integer>emptyList();
-        if (opts.isEmpty()) return from;             // nowhere to go
-        if (opts.size() == 1) return opts.get(0);    // deterministic
-        // naive “closer to destination id” heuristic
-        int best = from, bestScore = Integer.MAX_VALUE;
-        for (int n : opts) {
-            int s = Math.abs(dest - n);
-            if (s < bestScore) { bestScore = s; best = n; }
-        }
-        return best;
+        if (from == dest) return from;
+        Map<Integer, List<Integer>> destMap = ROUTES.get(from);
+        if (destMap == null) return from;
+        List<Integer> path = destMap.get(dest);
+        if (path == null || path.size() < 2) return from;
+        return path.get(1);
     }
 
     // ---- Interlocking API
@@ -90,8 +103,16 @@ public class InterlockingImpl implements Interlocking {
             throw new IllegalArgumentException("trainName must be non-empty");
         if (entryTrackSection <= 0 || destinationTrackSection <= 0)
             throw new IllegalArgumentException("Sections must be positive IDs");
-        if (trainSection.containsKey(trainName))
+        if (trainDest.containsKey(trainName))
             throw new IllegalStateException("Train already exists: " + trainName);
+
+        if (isPassenger(trainName)) {
+            if (!isPassengerSection(entryTrackSection) || !isPassengerSection(destinationTrackSection))
+                throw new IllegalArgumentException("Passenger train cannot use freight sections");
+        } else if (isFreight(trainName)) {
+            if (!isFreightSection(entryTrackSection) || !isFreightSection(destinationTrackSection))
+                throw new IllegalArgumentException("Freight train cannot use passenger sections");
+        }
 
         boolean southbound = isSouthbound(entryTrackSection, destinationTrackSection);
         if (!isValidEntry(southbound, entryTrackSection))
@@ -100,9 +121,12 @@ public class InterlockingImpl implements Interlocking {
             throw new IllegalArgumentException("Illegal destination for direction: " + destinationTrackSection);
         if (!isSectionFree(entryTrackSection))
             throw new IllegalStateException("Entry section occupied: " + entryTrackSection);
+        if (!hasRoute(entryTrackSection, destinationTrackSection))
+            throw new IllegalArgumentException("No route from entry to destination");
 
         trainDest.put(trainName, destinationTrackSection);
         occupy(entryTrackSection, trainName);
+        if (entryTrackSection == destinationTrackSection) exitReady.add(trainName);
     }
 
     @Override
@@ -114,64 +138,118 @@ public class InterlockingImpl implements Interlocking {
         for (String name : trainNames) {
             if (name == null || name.trim().isEmpty())
                 throw new IllegalArgumentException("train name in batch is empty");
-            if (!trainSection.containsKey(name))
-                throw new IllegalArgumentException("unknown train: " + name);
+            if (!trainDest.containsKey(name))
+                throw new IllegalArgumentException("train not active in corridor: " + name);
             if (!seen.add(name))
                 throw new IllegalArgumentException("duplicate train in batch: " + name);
         }
 
-        // stage claims
-        Map<String,Integer> desired = new HashMap<String,Integer>();
-        Map<Integer,List<String>> targetClaims = new HashMap<Integer,List<String>>();
+        int moved = 0;
+        List<String> exiting = new ArrayList<String>();
+
+        Map<String,Integer> desired = new LinkedHashMap<String,Integer>();
+        Map<String,int[]> desiredEdges = new HashMap<String,int[]>();
 
         for (String t : trainNames) {
+            if (exitReady.contains(t)) {
+                Integer current = trainSection.get(t);
+                if (current != null && current.intValue() >= 0) {
+                    vacate(current.intValue());
+                }
+                removeFromQueues(t);
+                exiting.add(t);
+                continue;
+            }
             int from = trainSection.get(t);
-            int dest = trainDest.containsKey(t) ? trainDest.get(t) : from;
+            int dest = trainDest.get(t);
             int next = pickNext(from, dest);
             if (next == from) continue;           // no progress
             if (!isSectionFree(next)) continue;   // blocked by occupancy
-            desired.put(t, next);
-            List<String> lst = targetClaims.get(next);
-            if (lst == null) { lst = new ArrayList<String>(); targetClaims.put(next, lst); }
-            lst.add(t);
+            desired.put(t, Integer.valueOf(next));
+            desiredEdges.put(t, new int[]{from, next});
         }
 
-        // resolve conflicts:
-        // - crossing targets: passenger-first (others denied)
-        // - non-crossing: deny-all (phase-1 simple policy)
+        List<String> crossingTrains = new ArrayList<String>();
+        for (Map.Entry<String,int[]> entry : desiredEdges.entrySet()) {
+            int[] edge = entry.getValue();
+            if (isCrossingEdge(edge[0], edge[1])) {
+                crossingTrains.add(entry.getKey());
+            }
+        }
+        if (crossingTrains.size() > 1) {
+            String winner = chooseCrossingWinner(crossingTrains);
+            for (String t : crossingTrains) {
+                if (!t.equals(winner)) {
+                    desired.remove(t);
+                    desiredEdges.remove(t);
+                }
+            }
+        }
+
+        Map<Integer,List<String>> targetClaims = new HashMap<Integer,List<String>>();
+        for (Map.Entry<String,Integer> entry : desired.entrySet()) {
+            int target = entry.getValue().intValue();
+            List<String> list = targetClaims.get(target);
+            if (list == null) {
+                list = new ArrayList<String>();
+                targetClaims.put(target, list);
+            }
+            list.add(entry.getKey());
+        }
+
         Map<String,Integer> granted = new HashMap<String,Integer>();
 
         for (Map.Entry<Integer,List<String>> entry : targetClaims.entrySet()) {
-            int target = entry.getKey();
+            int target = entry.getKey().intValue();
             List<String> claimants = entry.getValue();
+            cleanupMergeQueue(target, claimants);
 
             if (claimants.size() == 1) {
-                granted.put(claimants.get(0), target);
+                granted.put(claimants.get(0), Integer.valueOf(target));
                 continue;
             }
 
             if (CROSSING_SECTIONS.contains(target)) {
                 String passenger = null;
-                for (String c : claimants) { if (isPassenger(c)) { passenger = c; break; } }
-                if (passenger != null) {
-                    granted.put(passenger, target); // passenger wins; others denied
+                for (String c : claimants) {
+                    if (isPassenger(c)) { passenger = c; break; }
                 }
-                // else: all denied at crossing
+                String winner = passenger != null ? passenger : claimants.get(0);
+                granted.put(winner, Integer.valueOf(target));
+                continue;
+            }
+
+            if (isFairMergeTarget(target)) {
+                String winner = selectFairWinner(target, claimants);
+                if (winner != null) {
+                    granted.put(winner, Integer.valueOf(target));
+                }
                 continue;
             }
             // non-crossing multi-claim: deny all (no grant)
         }
 
         // Apply granted moves atomically
-        int moved = 0;
         for (Map.Entry<String,Integer> g : granted.entrySet()) {
             String t = g.getKey();
-            int to = g.getValue();
+            int to = g.getValue().intValue();
             // still free?
             if (!isSectionFree(to) && !t.equals(sectionOwner.get(to))) continue;
             int from = trainSection.get(t);
             vacate(from);
             occupy(to, t);
+            moved++;
+            if (trainDest.get(t) != null && to == trainDest.get(t)) {
+                exitReady.add(t);
+                removeFromQueues(t);
+            }
+        }
+
+        // Process exits after movement
+        for (String t : exiting) {
+            exitReady.remove(t);
+            trainDest.remove(t);
+            removeFromQueues(t);
             moved++;
         }
         return moved;
@@ -190,5 +268,139 @@ public class InterlockingImpl implements Interlocking {
         Integer sec = trainSection.get(trainName);
         if (sec == null) throw new IllegalArgumentException("unknown train: " + trainName);
         return sec;
+    }
+
+    private static boolean isCrossingEdge(int from, int to) {
+        return (from == 1 && to == 5) || (from == 5 && to == 1)
+                || (from == 2 && to == 6) || (from == 6 && to == 2)
+                || (from == 3 && to == 4) || (from == 4 && to == 3);
+    }
+
+    private String chooseCrossingWinner(List<String> trains) {
+        for (String t : trains) {
+            if (isPassenger(t)) {
+                return t;
+            }
+        }
+        return trains.get(0);
+    }
+
+    private boolean isFairMergeTarget(int section) {
+        return FAIR_MERGE_TARGETS.contains(Integer.valueOf(section));
+    }
+
+    private void cleanupMergeQueue(int target, List<String> claimants) {
+        if (!isFairMergeTarget(target)) {
+            mergeQueues.remove(Integer.valueOf(target));
+            return;
+        }
+        LinkedList<String> queue = mergeQueues.get(Integer.valueOf(target));
+        if (queue == null) return;
+        for (Iterator<String> it = queue.iterator(); it.hasNext(); ) {
+            String t = it.next();
+            if (!claimants.contains(t)) {
+                it.remove();
+            }
+        }
+        if (queue.isEmpty()) {
+            mergeQueues.remove(Integer.valueOf(target));
+        }
+    }
+
+    private String selectFairWinner(int target, List<String> claimants) {
+        LinkedList<String> queue = mergeQueues.get(Integer.valueOf(target));
+        if (queue == null) {
+            queue = new LinkedList<String>();
+            mergeQueues.put(Integer.valueOf(target), queue);
+        }
+        for (String claimant : claimants) {
+            if (!queue.contains(claimant)) {
+                queue.addLast(claimant);
+            }
+        }
+        Iterator<String> it = queue.iterator();
+        while (it.hasNext()) {
+            String candidate = it.next();
+            if (claimants.contains(candidate)) {
+                it.remove();
+                queue.addLast(candidate);
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private void removeFromQueues(String trainName) {
+        for (Iterator<Map.Entry<Integer, LinkedList<String>>> it = mergeQueues.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Integer, LinkedList<String>> entry = it.next();
+            LinkedList<String> queue = entry.getValue();
+            if (queue.remove(trainName) && queue.isEmpty()) {
+                it.remove();
+            }
+        }
+    }
+
+    // ---- Routing helpers ----
+    private static boolean hasRoute(int from, int dest) {
+        Map<Integer, List<Integer>> destMap = ROUTES.get(from);
+        return destMap != null && destMap.containsKey(dest);
+    }
+
+    private static Map<Integer, Map<Integer, List<Integer>>> computeRoutes() {
+        Map<Integer, Map<Integer, List<Integer>>> routes = new HashMap<Integer, Map<Integer, List<Integer>>>();
+        for (Map.Entry<Integer, List<Integer>> entry : NEXT_HOPS.entrySet()) {
+            int start = entry.getKey();
+            Map<Integer, Integer> prev = new HashMap<Integer, Integer>();
+            Queue<Integer> queue = new ArrayDeque<Integer>();
+            queue.add(Integer.valueOf(start));
+            prev.put(Integer.valueOf(start), null);
+
+            while (!queue.isEmpty()) {
+                int node = queue.remove().intValue();
+                List<Integer> neighbours = NEXT_HOPS.get(node);
+                if (neighbours == null) continue;
+                for (int nxt : neighbours) {
+                    if (prev.containsKey(Integer.valueOf(nxt))) continue;
+                    if (!sameLine(start, nxt)) continue;
+                    prev.put(Integer.valueOf(nxt), Integer.valueOf(node));
+                    queue.add(Integer.valueOf(nxt));
+                }
+            }
+
+            Map<Integer, List<Integer>> dests = new HashMap<Integer, List<Integer>>();
+            for (Integer reach : prev.keySet()) {
+                int dest = reach.intValue();
+                if (!sameLine(start, dest)) continue;
+                List<Integer> path = buildPath(start, dest, prev);
+                if (!path.isEmpty()) {
+                    dests.put(Integer.valueOf(dest), Collections.unmodifiableList(path));
+                }
+            }
+            routes.put(Integer.valueOf(start), Collections.unmodifiableMap(dests));
+        }
+        return Collections.unmodifiableMap(routes);
+    }
+
+    private static List<Integer> buildPath(int start, int dest, Map<Integer, Integer> prev) {
+        List<Integer> path = new ArrayList<Integer>();
+        Integer cursor = Integer.valueOf(dest);
+        while (cursor != null) {
+            path.add(0, cursor.intValue());
+            cursor = prev.get(cursor);
+        }
+        if (path.isEmpty() || path.get(0).intValue() != start) {
+            return Collections.<Integer>emptyList();
+        }
+        return path;
+    }
+
+    private static boolean sameLine(int a, int b) {
+        boolean passengerA = isPassengerSection(a);
+        boolean passengerB = isPassengerSection(b);
+        boolean freightA = isFreightSection(a);
+        boolean freightB = isFreightSection(b);
+        if (passengerA && passengerB) return true;
+        if (freightA && freightB) return true;
+        return (!passengerA && !freightA) && (!passengerB && !freightB); // default allow only if both unknown
     }
 }
