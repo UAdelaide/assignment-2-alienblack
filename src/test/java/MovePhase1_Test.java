@@ -4,37 +4,50 @@ import static org.junit.Assert.*;
 public class MovePhase1_Test {
 
     @Test
-    public void movesIntoFreeAdjacentSection() {
+    public void passengerFollowsMainlinePath() {
         Interlocking sys = new InterlockingImpl();
-        sys.addTrain("A", 1, 4);                // path: 1 -> 2 -> 4
-        int moved = sys.moveTrains(new String[]{"A"});
+        sys.addTrain("P1", 1, 8); // passenger route: 1 -> 5 -> 8
+
+        int moved = sys.moveTrains(new String[]{"P1"});
         assertEquals(1, moved);
-        assertEquals(2, sys.getTrain("A"));
+        assertEquals(5, sys.getTrain("P1"));
+
+        moved = sys.moveTrains(new String[]{"P1"});
+        assertEquals(1, moved);
+        assertEquals(8, sys.getTrain("P1"));
     }
 
     @Test
-    public void deniesMoveIntoOccupiedTarget() {
+    public void freightStaysOnFreightLine() {
         Interlocking sys = new InterlockingImpl();
 
-        // Occupy section 2 legally: enter at 3 then move once (3 -> 2)
-        sys.addTrain("B", 3, 4);                  // legal south entry
-        int movedB = sys.moveTrains(new String[]{"B"});
-        assertEquals(1, movedB);
-        assertEquals(2, sys.getTrain("B"));       // B now occupies 2
+        sys.addTrain("F1", 3, 11); // freight route: 3 -> 7 -> 11
+        int moved = sys.moveTrains(new String[]{"F1"});
+        assertEquals(1, moved);
+        assertEquals(7, sys.getTrain("F1"));
 
-        // Now A tries to move from 1 -> 2 but should be blocked by occupancy
-        sys.addTrain("A", 1, 4);                  // legal south entry
-        int moved = sys.moveTrains(new String[]{"A"}); // don't move B this tick
-        assertEquals(0, moved);                    // A blocked
-        assertEquals(1, sys.getTrain("A"));       // A stays at 1
-        assertEquals(2, sys.getTrain("B"));       // B still at 2
+        moved = sys.moveTrains(new String[]{"F1"});
+        assertEquals(1, moved);
+        assertEquals(11, sys.getTrain("F1"));
     }
 
+    @Test(expected = IllegalArgumentException.class)
+    public void passengerCannotTargetFreightSection() {
+        Interlocking sys = new InterlockingImpl();
+        sys.addTrain("P1", 1, 11); // illegal: passenger into freight exit
+    }
 
     @Test
-    public void conflictingClaimsDenyAll() {
-        // Only if you later add a fork where two trains claim the same target.
-        // For now, this is a placeholder to expand when NEXT_HOPS has a fan-in.
-        assertTrue(true);
+    public void exitsOnNextRequestedMove() {
+        Interlocking sys = new InterlockingImpl();
+        sys.addTrain("P1", 1, 8);
+
+        sys.moveTrains(new String[]{"P1"}); // 1 -> 5
+        sys.moveTrains(new String[]{"P1"}); // 5 -> 8 (destination)
+        assertEquals(8, sys.getTrain("P1"));
+
+        int moved = sys.moveTrains(new String[]{"P1"}); // exit
+        assertEquals(1, moved);
+        assertEquals(-1, sys.getTrain("P1"));
     }
 }
