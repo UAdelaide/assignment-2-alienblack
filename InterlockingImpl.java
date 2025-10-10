@@ -9,6 +9,12 @@ import java.util.*;
  */
 public class InterlockingImpl implements Interlocking {
 
+    public enum Outcome {
+        PROGRESS,
+        BLOCKED,
+        DEADLOCK
+    }
+
     // ---- Entry/exit constraints
     private static final Set<Integer> SOUTH_ENTRY = new HashSet<Integer>(Arrays.asList(1, 3));
     private static final Set<Integer> SOUTH_EXIT  = new HashSet<Integer>(Arrays.asList(4, 8, 9, 11));
@@ -36,9 +42,6 @@ public class InterlockingImpl implements Interlocking {
         ROUTES = computeRoutes();
     }
 
-    // Crossing targets where priority applies (adjust if your map changes)
-    private static final Set<Integer> CROSSING_SECTIONS = new HashSet<Integer>(Arrays.asList(4, 5));
-
     // ---- State
     /** sectionId -> trainName */
     private final Map<Integer, String> sectionOwner = new HashMap<Integer, String>();
@@ -50,6 +53,8 @@ public class InterlockingImpl implements Interlocking {
     private final Set<String> exitReady = new HashSet<String>();
     /** fairness queues for non-crossing merges */
     private final Map<Integer, LinkedList<String>> mergeQueues = new HashMap<Integer, LinkedList<String>>();
+    /** last movement outcome for diagnostics */
+    private Outcome lastOutcome = Outcome.BLOCKED;
 
     // ---- Helpers (direction + validation)
     private static boolean isSouthbound(int entry, int dest) {
@@ -83,7 +88,7 @@ public class InterlockingImpl implements Interlocking {
     }
     private void vacate(int sectionId) {
         String t = sectionOwner.remove(sectionId);
-        if (t != null) trainSection.put(t, Integer.valueOf(-1));
+        if (t != null) trainSection.remove(t);
     }
     private int pickNext(int from, int dest) {
         if (from == dest) return from;
@@ -149,6 +154,9 @@ public class InterlockingImpl implements Interlocking {
 
         Map<String,Integer> desired = new LinkedHashMap<String,Integer>();
         Map<String,int[]> desiredEdges = new HashMap<String,int[]>();
+        boolean anyRequests = false;
+        boolean blockedByOccupancy = false;
+        boolean blockedByPolicy = false;
 
         for (String t : trainNames) {
             if (exitReady.contains(t)) {
@@ -164,7 +172,11 @@ public class InterlockingImpl implements Interlocking {
             int dest = trainDest.get(t);
             int next = pickNext(from, dest);
             if (next == from) continue;           // no progress
-            if (!isSectionFree(next)) continue;   // blocked by occupancy
+            anyRequests = true;
+            if (!isSectionFree(next)) {
+                blockedByOccupancy = true;
+                continue;   // blocked by occupancy
+            }
             desired.put(t, Integer.valueOf(next));
             desiredEdges.put(t, new int[]{from, next});
         }
@@ -182,6 +194,7 @@ public class InterlockingImpl implements Interlocking {
                 if (!t.equals(winner)) {
                     desired.remove(t);
                     desiredEdges.remove(t);
+                    blockedByPolicy = true;
                 }
             }
         }
@@ -209,24 +222,18 @@ public class InterlockingImpl implements Interlocking {
                 continue;
             }
 
-            if (CROSSING_SECTIONS.contains(target)) {
-                String passenger = null;
-                for (String c : claimants) {
-                    if (isPassenger(c)) { passenger = c; break; }
-                }
-                String winner = passenger != null ? passenger : claimants.get(0);
-                granted.put(winner, Integer.valueOf(target));
-                continue;
-            }
-
             if (isFairMergeTarget(target)) {
                 String winner = selectFairWinner(target, claimants);
                 if (winner != null) {
                     granted.put(winner, Integer.valueOf(target));
+                    if (claimants.size() > 1) {
+                        blockedByPolicy = true;
+                    }
                 }
                 continue;
             }
             // non-crossing multi-claim: deny all (no grant)
+            blockedByPolicy = true;
         }
 
         // Apply granted moves atomically
@@ -252,6 +259,13 @@ public class InterlockingImpl implements Interlocking {
             removeFromQueues(t);
             moved++;
         }
+        if (moved > 0) {
+            lastOutcome = Outcome.PROGRESS;
+        } else if (anyRequests && (blockedByOccupancy || blockedByPolicy)) {
+            lastOutcome = Outcome.DEADLOCK;
+        } else {
+            lastOutcome = Outcome.BLOCKED;
+        }
         return moved;
     }
 
@@ -268,6 +282,10 @@ public class InterlockingImpl implements Interlocking {
         Integer sec = trainSection.get(trainName);
         if (sec == null) throw new IllegalArgumentException("unknown train: " + trainName);
         return sec;
+    }
+
+    public Outcome getLastOutcome() {
+        return lastOutcome;
     }
 
     private static boolean isCrossingEdge(int from, int to) {
@@ -395,12 +413,8 @@ public class InterlockingImpl implements Interlocking {
     }
 
     private static boolean sameLine(int a, int b) {
-        boolean passengerA = isPassengerSection(a);
-        boolean passengerB = isPassengerSection(b);
-        boolean freightA = isFreightSection(a);
-        boolean freightB = isFreightSection(b);
-        if (passengerA && passengerB) return true;
-        if (freightA && freightB) return true;
-        return (!passengerA && !freightA) && (!passengerB && !freightB); // default allow only if both unknown
+        boolean pA = PASSENGER_SECTIONS.contains(a), pB = PASSENGER_SECTIONS.contains(b);
+        boolean fA = FREIGHT_SECTIONS.contains(a),   fB = FREIGHT_SECTIONS.contains(b);
+        return (pA && pB) || (fA && fB);
     }
 }
