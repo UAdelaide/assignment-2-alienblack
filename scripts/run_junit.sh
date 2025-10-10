@@ -10,8 +10,8 @@ HAM="${HAM:-$HOME/.m2/repository/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.
 rm -rf out
 mkdir -p out
 
-# Compile all sources
-find src -name '*.java' > sources.txt
+# Compile all sources (default package in repo root)
+find . -maxdepth 1 -name '*.java' | sort > sources.txt
 javac -source 11 -target 11 -cp "$JUNIT:$HAM" -d out @sources.txt
 
 # Discover default-package tests only at top level of out
