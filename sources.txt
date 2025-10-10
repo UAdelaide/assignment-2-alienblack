@@ -5,6 +5,7 @@ src/test/java/CrossingConflict_Test.java
 src/test/java/RoutingRules_Test.java
 src/test/java/NoEnabledMoves_Test.java
 src/test/java/MovePhase1_Test.java
+src/test/java/FairMerge_Test.java
 src/main/java/Main.java
 src/main/java/Interlocking.java
 src/main/java/InterlockingImpl.java

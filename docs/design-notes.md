@@ -1,60 +1,100 @@
-# Petri-net Design (AlienBlack Interlocking)
+# Petri-net Design (v2 — student notes)
 
-## 1) Scope & Goals
-- Model the station track 1–11 with **places** for section occupancy and **transitions** for legal moves.
-- Enforce: single-section occupancy, safe crossing, no collisions, progress (avoid deadlock), and passenger-first priority at the crossing.
+## Snapshot summary
+- Corridor = 11 numbered sections. Passenger trains stay within {1,2,5,6,8,9,10}; freight trains remain in {3,4,7,11}. No legal move switches line sets.
+- Crossing mutex covers the geometric clash between edges `1↔5`, `2↔6`, and `3↔4`; passenger trains win when contending with freight. Only one crossing move fires per tick.
+- Non-crossing merges at sections **6** (northbound funnel from entries 9 & 10) and **9** (southbound funnel from sections 5 & 6) use a round-robin token so trains alternate access.
+- When a train enters its destination section it stays there until the next `moveTrains` call, then exits (matching the assignment brief).
+- Deadlock handling (phase 3) will classify “no enabled moves” states and apply a resolution policy; current code records zero moves but does not yet escalate.
 
-## 2) Elements (version v1)
-**Places**
-- `S_i_free` for each section i ∈ {1..11} (token present ⇒ section i available).
-- `Train_T_at_i` for each active train T and its current section i (one token marking location).
-- `Crossing_mutex` for the shared crossing resource (1 token ⇒ free).
+## 1. Track map (undirected adjacency)
 
-**Transitions**
-- `move_i_j_T`: move train T from i to j (legal adjacency).
-  - **Input:** `Train_T_at_i` + `S_j_free` (+ `Crossing_mutex` if i→j traverses the crossing).
-  - **Output:** `Train_T_at_j` + `S_i_free` (+ return `Crossing_mutex`).
-- `enter_south_i_T`: place T into entry section i ∈ {1,3}.
-- `enter_north_i_T`: place T into entry section i ∈ {4,9,10,11}.
-- `exit_south_k_T`: remove T at k ∈ {4,8,9,11}.
-- `exit_north_k_T`: remove T at k ∈ {2,3}.
+| Section | Line      | Neighbours       | Notes |
+|---------|-----------|------------------|-------|
+| 1       | Passenger | 5                | South passenger entry |
+| 2       | Passenger | 6                | South passenger entry / north exit |
+| 3       | Freight   | 4, 7             | South freight entry / north exit |
+| 4       | Freight   | 3, 7             | Workshops spur; part of crossing |
+| 5       | Passenger | 1, 8, 9          | Passenger trunk; part of crossing |
+| 6       | Passenger | 2, 9, 10         | Passenger trunk; part of crossing & merge |
+| 7       | Freight   | 3, 4, 11         | Freight trunk merge |
+| 8       | Passenger | 5                | Passenger exit (east) |
+| 9       | Passenger | 5, 6             | Passenger merge/diverge |
+| 10      | Passenger | 6                | Passenger entry (north) |
+| 11      | Freight   | 7                | Freight exit (east) |
 
-**Guards/Policies (encoded as transition enabling rules)**
-- **Single occupancy:** `S_j_free` is required to fire `move_i_j_T`.
-- **Passenger-first at crossing:** if both passenger and freight moves demand `Crossing_mutex` this tick, enable passenger transition; withhold freight.
-- **No line-hopping:** transitions only along designated line branches (freight vs passenger) per map.
+Entry/exit rules from the brief:
+- Southbound (left → right) enter {1,3}, exit {4,8,9,11}.
+- Northbound (right → left) enter {4,9,10,11}, exit {2,3}.
 
-## 3) Crossing modeling (v1)
-- Represent the conflict as a **resource place** `Crossing_mutex` consumed/produced by any transition that enters the crossing section.
-- Passenger-first implemented by enabling function: if both claims exist, only passenger transition is enabled.
+## 2. Special resources and policies
 
-## 4) Deadlock Avoidance (v2 idea)
-- **Pre-reservation**: before occupying a pre-crossing section, require `DownstreamBuffer_free` to avoid nose-to-nose blocks.
-- **Fairness**: on non-crossing merges, use token rotation via a small “turnstile” subnet—token cycles through trains requesting the merge.
+**Crossing mutex**  
+- Applied to the six directed edges `{1→5, 5→1, 2→6, 6→2, 3→4, 4→3}`.  
+- If both passenger and freight request the mutex in the same tick, the passenger move fires. Same-type clashes release no more than one train per tick.  
+- Crossing arbitration happens before regular target-based conflict handling.
 
-## 5) Correctness arguments
-- **Safety (no two in one section):** every move requires `S_j_free`; firing consumes it and releases `S_i_free` afterward.
-- **Collision-free:** simultaneous i→j and j→i cannot both be enabled because both require `S_i_free/S_j_free` that change atomically; at least one precondition fails.
-- **Crossing safety:** `Crossing_mutex` has capacity 1; transitions that need it are mutually exclusive.
-- **Priority:** enabling function disables freight-at-crossing when a passenger also claims it.
+**Fair merges (implemented in code)**  
+- Sections 6 and 9 each own a logical token (`Merge6_turn`, `Merge9_turn`) that rotates across contending trains (round robin). This prevents starvation when two independent approaches want the same section.  
+- Crossing still uses passenger-first rather than the fairness token.
 
-## 6) Mapping to code
-- `S_i_free` ↔ `isSectionFree(i)`
-- `Train_T_at_i` ↔ `trainSection.get(T) == i`
-- `Crossing_mutex` ↔ “target in `CROSSING_SECTIONS` AND no higher-priority claimant”
-- Transition firing ↔ staging desired moves + atomic apply in `moveTrains`
+**Exit-on-next-move**  
+- Arrival at the destination section arms an `exit_ready` token. On the next `moveTrains` call the train consumes `exit_ready`, frees its section, and leaves the corridor (reporting `-1` via `getTrain`).
 
-## 7) Diagrams to include
-- **Big map**: all sections 1–11 with places and move transitions.
-- **Inset A**: crossing subnet (`Crossing_mutex` + passenger-first enable).
-- **Inset B**: non-crossing merge subnet with round-robin buffer (v2).
-- **Legend**: place (circle), transition (bar), token semantics, priorities.
+**Deadlock signalling**  
+- When a tick produces zero enabled moves while trains remain inside, the system records a “no progress” state. Phase 3 will categorise this as block/deadlock and trigger a recovery strategy.
 
-## 8) Known limitations (to be addressed)
-- Current code denies all trains on same target (non-crossing). v2 will add round-robin.
-- No explicit “system deadlock” detector yet (only 0 moves). v2 will compute enabled-set emptiness for classification.
+## 3. Petri-net ingredients
 
-## 9) Next actions
-- Expand adjacency for all sections (1–11) and update Petri-net accordingly.
-- Add fairness subnet sketch; align code (round-robin per merge target).
-- Add explicit deadlock classification in code and a small proof sketch in this doc.
+- **Places**
+  - `S_i_free` for section availability.
+  - `Train_T_at_i` for each active train.
+  - `Crossing_mutex` (capacity 1).
+  - `Merge6_turn`, `Merge9_turn` for fairness tokens.
+  - `Exit_ready_T` when a train has reached its destination.
+- **Transitions**
+  - `enter_{dir}_i_T` for legal entries.
+  - `move_i_j_T` for each adjacency edge that stays on the correct line, consuming `S_j_free` and any mutex/merge tokens needed.
+  - `exit_{dir}_k_T` to remove trains from legal exits.
+  - `mark_exit_ready_T` (conceptual) to place `Exit_ready_T` once `i == dest`.
+  - Token-rotation transitions for the merge places (implemented as queue logic in code).
+
+## 4. Code mapping plan
+
+| Petri-net idea | Java structure |
+|----------------|----------------|
+| `S_i_free` | `sectionOwner` + `isSectionFree(sectionId)` |
+| `Train_T_at_i` | `trainSection` map |
+| `Crossing_mutex` | crossing edge arbitration (`chooseCrossingWinner`) |
+| `Merge6/9_turn` | `mergeQueues` round-robin scheduler |
+| `Exit_ready_T` | `exitReady` set processed in `moveTrains` |
+
+Routing uses a precomputed BFS from each section to every reachable destination (passenger vs freight maps kept separate via `sameLine`). Train type is inferred from name prefix (`P*` passenger, `F*` freight); other names default to passenger unless additional validation is added later.
+
+### Invariants cheat-sheet
+
+| Invariant | Enforcement idea |
+|-----------|------------------|
+| ≤1 train per section | `S_i_free` token + atomic apply |
+| Train stays on its line | BFS restricts to same line; entry/dest validation |
+| Crossing capacity = 1 | crossing mutex arbitration |
+| Passenger wins crossing vs freight | passenger-first selection |
+| Non-crossing merges progress | rotating fairness token (sections 6 & 9) |
+
+## 5. Testing roadmap
+1. **Phase 1 (graph + exits)**  
+   - Passenger reachability (1→5→8), freight reachability (3→7→11).  
+   - Wrong-line entry/destination guarded.  
+   - Exit on next move verified (`MovePhase1_Test`, `RoutingRules_Test`, etc.).
+2. **Phase 2 (crossing + fairness)**  
+   - Passenger beats freight at crossing; freight only moves when passenger absent/cleared (`PriorityAndCrossing_Test`, `CrossingConflict_Test`).  
+   - Round-robin merge scheduling at section 6 (`FairMerge_Test`).  
+   - All prior tests kept green.
+3. **Phase 3 (deadlock)**  
+   - Detect stalemates (e.g., opposing freights on 3↔7↔11, passengers on 5↔9↔6).  
+   - Resolve and classify outcomes (“deadlock”, “block”), with targeted JUnit coverage.
+
+## 6. Next actions
+1. Export updated Petri-net diagrams (full map, crossing inset, merge fairness inset) to `docs/petri-net-v2.pdf`.  
+2. Phase 3: implement deadlock detection/resolution logic plus matching tests.  
+3. Document the deadlock policy in these notes and extend progress log with verification steps.
