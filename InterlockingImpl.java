@@ -151,6 +151,7 @@ public class InterlockingImpl implements Interlocking {
 
         int moved = 0;
         List<String> exiting = new ArrayList<String>();
+        Map<String,Integer> exitPositions = new HashMap<String,Integer>();
 
         Map<String,Integer> desired = new LinkedHashMap<String,Integer>();
         Map<String,int[]> desiredEdges = new HashMap<String,int[]>();
@@ -161,11 +162,11 @@ public class InterlockingImpl implements Interlocking {
         for (String t : trainNames) {
             if (exitReady.contains(t)) {
                 Integer current = trainSection.get(t);
-                if (current != null && current.intValue() >= 0) {
-                    vacate(current.intValue());
+                if (current != null) {
+                    exitPositions.put(t, current);
                 }
-                removeFromQueues(t);
                 exiting.add(t);
+                anyRequests = true;
                 continue;
             }
             int from = trainSection.get(t);
@@ -254,6 +255,10 @@ public class InterlockingImpl implements Interlocking {
 
         // Process exits after movement
         for (String t : exiting) {
+            Integer section = exitPositions.get(t);
+            if (section != null) {
+                vacate(section.intValue());
+            }
             exitReady.remove(t);
             trainDest.remove(t);
             removeFromQueues(t);
