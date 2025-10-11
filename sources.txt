@@ -1,5 +1,6 @@
 BasicFlow_Test.java
 CrossingConflict_Test.java
+DeadlockHandling_Test.java
 FairMerge_Test.java
 Interlocking.java
 InterlockingImpl.java

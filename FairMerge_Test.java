@@ -20,7 +20,12 @@ public class FairMerge_Test {
         sys.moveTrains(new String[]{first}); // 6 -> 2
         assertEquals(2, sys.getTrain(first));
         sys.moveTrains(new String[]{first}); // exit
-        assertEquals(-1, sys.getTrain(first));
+        try {
+            sys.getTrain(first);
+            fail("Train should have exited corridor");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
 
         // Introduce a new challenger on the same merge
         String challengerEntry = first.equals("P9") ? "P3" : "P4";
