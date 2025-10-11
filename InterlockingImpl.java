@@ -266,8 +266,12 @@ public class InterlockingImpl implements Interlocking {
         }
         if (moved > 0) {
             lastOutcome = Outcome.PROGRESS;
-        } else if (anyRequests && (blockedByOccupancy || blockedByPolicy)) {
+        } else if (!anyRequests) {
+            lastOutcome = Outcome.BLOCKED;
+        } else if (blockedByOccupancy) {
             lastOutcome = Outcome.DEADLOCK;
+        } else if (blockedByPolicy) {
+            lastOutcome = Outcome.BLOCKED;
         } else {
             lastOutcome = Outcome.BLOCKED;
         }
