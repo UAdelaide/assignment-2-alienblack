@@ -96,25 +96,21 @@ public class InterlockingImpl implements Interlocking {
     private void occupy(int s, String train) {
         sectionOwner.put(Integer.valueOf(s), train);
         trainSection.put(train, Integer.valueOf(s));
-        exitReady.remove(train);
     }
 
     private void vacate(int s) {
         String t = sectionOwner.remove(Integer.valueOf(s));
-        if (t != null) {
-            trainSection.remove(t);
-            exitReady.remove(t);
-        }
+        if (t != null) trainSection.put(t, Integer.valueOf(-1));
     }
 
     // Crossing edges: passenger (1<->5, 2<->6) and freight (3<->4)
-    private static boolean isCrossingEdge(int from, int to) {
+    boolean isCrossingEdge(int from, int to) {
         return (from == 1 && to == 5) || (from == 5 && to == 1)
                 || (from == 2 && to == 6) || (from == 6 && to == 2)
                 || (from == 3 && to == 4) || (from == 4 && to == 3);
     }
 
-    private static String chooseCrossingWinner(List<String> trains) {
+    private String chooseCrossingWinner(List<String> trains) {
         for (String t : trains) {
             if (isPassenger(t)) {
                 return t;
@@ -181,15 +177,13 @@ public class InterlockingImpl implements Interlocking {
 
     // ---- Routing helpers ----
     private static boolean hasRoute(int from, int dest) {
-        Map<Integer, List<Integer>> destMap = ROUTES.get(Integer.valueOf(from));
-        return destMap != null && destMap.containsKey(Integer.valueOf(dest));
+        Map<Integer, List<Integer>> destMap = ROUTES.get(from);
+        return destMap != null && destMap.containsKey(dest);
     }
 
     private static int pickNext(int from, int dest) {
         if (from == dest) return from;
-        Map<Integer, List<Integer>> destMap = ROUTES.get(Integer.valueOf(from));
-        if (destMap == null) return from;
-        List<Integer> path = destMap.get(Integer.valueOf(dest));
+        List<Integer> path = ROUTES.get(from).get(dest);
         if (path == null || path.isEmpty()) return from;
         if (path.size() >= 2) return path.get(1).intValue();
         return from;
@@ -293,14 +287,14 @@ public class InterlockingImpl implements Interlocking {
         int moved = 0;
         List<String> exiting = new ArrayList<String>();
         Map<String,Integer> exitPositions = new HashMap<String,Integer>();
-        Map<String,Integer> desired = new LinkedHashMap<String,Integer>();
+        Map<String,Integer> desired = new HashMap<String,Integer>();
         Map<String,int[]> desiredEdges = new HashMap<String,int[]>();
 
         boolean anyRequests = false;
         boolean blockedByOccupancy = false;
         boolean blockedByPolicy = false;
 
-        // Build desired moves
+        // Phase 1: gather each train's next-hop request.
         for (String t : trainNames) {
             Integer pos = trainSection.get(t);
             if (pos == null) continue;
@@ -309,7 +303,6 @@ public class InterlockingImpl implements Interlocking {
             if (exitReady.contains(t)) {
                 // next move is exit: record for later
                 exiting.add(t);
-                anyRequests = true;
                 exitPositions.put(t, Integer.valueOf(from));
                 continue;
             }
@@ -325,7 +318,7 @@ public class InterlockingImpl implements Interlocking {
             desiredEdges.put(t, new int[]{from, next});
         }
 
-        // Crossing arbitration: only one train can own the diamond per tick (passenger priority)
+        // Phase 2: keep the crossing diamond single-occupancy (passengers win ties).
         List<String> crossingTrains = new ArrayList<String>();
         for (Map.Entry<String,int[]> entry : desiredEdges.entrySet()) {
             int[] edge = entry.getValue();
@@ -344,6 +337,7 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
+        // Phase 3: run the merge fairness queues so rivals alternate cleanly.
         Map<Integer,List<String>> targetClaims = new HashMap<Integer,List<String>>();
         for (Map.Entry<String,Integer> en : desired.entrySet()) {
             int to = en.getValue().intValue();
@@ -354,35 +348,30 @@ public class InterlockingImpl implements Interlocking {
             }
             list.add(en.getKey());
         }
+        // Resolve each contested target using the fairness queues.
         for (Map.Entry<Integer,List<String>> en : targetClaims.entrySet()) {
             int target = en.getKey().intValue();
             List<String> claimants = en.getValue();
+            if (claimants.size() <= 1) {
+                cleanupMergeQueue(target, claimants);
+                continue;
+            }
+            String winner = pickFairWinner(target, claimants);
+            if (winner == null) {
+                // fall back to stable order
+                Collections.sort(claimants);
+                winner = claimants.get(0);
+            }
             cleanupMergeQueue(target, claimants);
-            if (claimants.size() == 1) {
-                continue;
-            }
-            if (isFairMergeTarget(target)) {
-                String winner = pickFairWinner(target, claimants);
-                if (winner != null) {
-                    for (String t : new ArrayList<String>(claimants)) {
-                        if (!t.equals(winner)) {
-                            desired.remove(t);
-                            desiredEdges.remove(t);
-                            blockedByPolicy = true;
-                        }
-                    }
+            for (String t : claimants) {
+                if (!t.equals(winner)) {
+                    desired.remove(t);
+                    blockedByOccupancy = true;
                 }
-                continue;
             }
-            // non-fair targets: deny everyone this tick
-            for (String t : new ArrayList<String>(claimants)) {
-                desired.remove(t);
-                desiredEdges.remove(t);
-            }
-            blockedByPolicy = true;
         }
 
-        // Apply moves atomically
+        // Phase 4: apply all granted moves in one sweep.
         for (Map.Entry<String,Integer> en : desired.entrySet()) {
             String t = en.getKey();
             int to = en.getValue().intValue();
@@ -394,19 +383,17 @@ public class InterlockingImpl implements Interlocking {
             }
             // move
             sectionOwner.remove(Integer.valueOf(from));
-            occupy(to, t);
+            sectionOwner.put(Integer.valueOf(to), t);
+            trainSection.put(t, Integer.valueOf(to));
 
             // If reached destination, mark to exit on next move
             if (to == trainDest.get(t)) {
                 exitReady.add(t);
-                removeFromQueues(t);
             }
             moved++;
         }
 
         // Process exits after movement
-        // Exit-ready trains drop out after everyone else has been processed,
-        // so followers still observe the section as occupied during arbitration.
         for (String t : exiting) {
             Integer section = exitPositions.get(t);
             if (section != null) {
@@ -418,15 +405,17 @@ public class InterlockingImpl implements Interlocking {
             moved++;
         }
 
-        // Outcome classification (refined)
+        // Phase 5: remember why this tick did (or didn't) make progress.
         if (moved > 0) {
-            lastOutcome = Outcome.PROGRESS;
-        } else if (anyRequests && blockedByOccupancy) {
-            lastOutcome = Outcome.DEADLOCK;
-        } else if (anyRequests && blockedByPolicy) {
-            lastOutcome = Outcome.BLOCKED;
+            if (blockedByOccupancy || blockedByPolicy) {
+                lastOutcome = Outcome.BLOCKED;   // some progress, some waits
+            } else {
+                lastOutcome = Outcome.PROGRESS;  // smooth tick
+            }
+        } else if (anyRequests) {
+            lastOutcome = Outcome.DEADLOCK;      // requests existed but nobody moved
         } else {
-            lastOutcome = Outcome.BLOCKED;
+            lastOutcome = Outcome.BLOCKED;       // no requests or no eligible moves
         }
         return moved;
     }
@@ -444,9 +433,5 @@ public class InterlockingImpl implements Interlocking {
         Integer s = trainSection.get(trainName);
         if (s == null) throw new IllegalArgumentException("Unknown train: " + trainName);
         return s.intValue();
-    }
-
-    public Outcome getLastOutcome() {
-        return lastOutcome;
     }
 }
