@@ -5,7 +5,7 @@
 - Crossing mutex covers the geometric clash between edges `1↔5`, `2↔6`, and `3↔4`; passenger trains win when contending with freight. Only one crossing move fires per tick.
 - Non-crossing merges at sections **6** (northbound funnel from entries 9 & 10) and **9** (southbound funnel from sections 5 & 6) use a round-robin token so trains alternate access.
 - When a train enters its destination section it stays there until the next `moveTrains` call, then exits (matching the assignment brief).
-- Deadlock handling (phase 3) will classify “no enabled moves” states and apply a resolution policy; current code records zero moves but does not yet escalate.
+- Deadlock handling now classifies “no progress” ticks (`Outcome` ∈ {PROGRESS, BLOCKED, DEADLOCK}) so tests can verify when the network is stuck.
 
 ## 1. Track map (undirected adjacency)
 
@@ -42,7 +42,7 @@ Entry/exit rules from the brief:
 - Arrival at the destination section arms an `exit_ready` token. On the next `moveTrains` call the train consumes `exit_ready`, frees its section, and leaves the corridor (reporting `-1` via `getTrain`).
 
 **Deadlock signalling**  
-- When a tick produces zero enabled moves while trains remain inside, the system records a “no progress” state. Phase 3 will categorise this as block/deadlock and trigger a recovery strategy.
+- Each `moveTrains` call reports an `Outcome` stored in `getLastOutcome()`. “Deadlock” is raised when at least one train requested movement but all were blocked (occupancy or policy). “Blocked” captures idle ticks (no requests). Tests use this to assert behaviours.
 
 ## 3. Petri-net ingredients
 
@@ -91,10 +91,10 @@ Routing uses a precomputed BFS from each section to every reachable destination 
    - Round-robin merge scheduling at section 6 (`FairMerge_Test`).  
    - All prior tests kept green.
 3. **Phase 3 (deadlock)**  
-   - Detect stalemates (e.g., opposing freights on 3↔7↔11, passengers on 5↔9↔6).  
-   - Resolve and classify outcomes (“deadlock”, “block”), with targeted JUnit coverage.
+   - Detect stalemates (e.g., opposing freights on 3↔7↔11).  
+   - Classification verified via `DeadlockHandling_Test` (`getLastOutcome()` returns DEADLOCK/BLOCKED/PROGRESS).
 
 ## 6. Next actions
 1. Export updated Petri-net diagrams (full map, crossing inset, merge fairness inset) to `docs/petri-net-v2.pdf`.  
-2. Phase 3: implement deadlock detection/resolution logic plus matching tests.  
-3. Document the deadlock policy in these notes and extend progress log with verification steps.
+2. Phase 4: add deadlock-resolution notes to the PDF caption and ensure README/submission instructions are up to date.  
+3. Final verification sweep (all tests + manual sanity) before submission.
