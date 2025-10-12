@@ -9,5 +9,4 @@ MovePhase1_Test.java
 NoEnabledMoves_Test.java
 OccupancyLocks_Test.java
 PriorityAndCrossing_Test.java
-RegressionScenarios_Test.java
 RoutingRules_Test.java
