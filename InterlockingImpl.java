@@ -312,26 +312,28 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
-        // handle merge fairness (6 and 7): if multiple trains target same merge section, choose fairly
+        // handle merge fairness (6 and 7): detect local deadlocks instead of picking winners
         Map<Integer,List<String>> targetClaims = new HashMap<Integer,List<String>>();
         for (Map.Entry<String,Integer> entry : candidateTargets.entrySet()) {
             int target = entry.getValue().intValue();
             targetClaims.computeIfAbsent(target, k -> new ArrayList<String>()).add(entry.getKey());
         }
         Map<String,Integer> granted = new LinkedHashMap<String,Integer>();
+        boolean localDeadlockOnMerge = false;
         for (Map.Entry<Integer,List<String>> entry : targetClaims.entrySet()) {
             int target = entry.getKey().intValue();
             List<String> claimants = entry.getValue();
             cleanupMergeQueue(target, claimants);
             if (claimants.size() == 1) {
-                granted.put(claimants.get(0), Integer.valueOf(target));
-            } else {
-                blockedByPolicy = true;
+                String t = claimants.get(0);
                 if (isFairMergeTarget(target)) {
-                    String winner = selectFairWinner(target, claimants);
-                    if (winner != null) {
-                        granted.put(winner, Integer.valueOf(target));
-                    }
+                    selectFairWinner(target, claimants);
+                }
+                granted.put(t, Integer.valueOf(target));
+            } else {
+                localDeadlockOnMerge = true;
+                if (isFairMergeTarget(target)) {
+                    enqueueMergeClaimants(target, claimants);
                 }
             }
         }
@@ -393,7 +395,7 @@ public class InterlockingImpl implements Interlocking {
             lastOutcome = Outcome.BLOCKED;
         } else if (collisionDetected) {
             lastOutcome = Outcome.COLLISION;
-        } else if (dependencyCycle) {
+        } else if (dependencyCycle || localDeadlockOnMerge) {
             lastOutcome = Outcome.DEADLOCK;
         } else if (blockedByPolicy || blockedByOccupancy) {
             lastOutcome = Outcome.BLOCKED;
@@ -480,6 +482,19 @@ public class InterlockingImpl implements Interlocking {
             }
         }
         return null;
+    }
+
+    private void enqueueMergeClaimants(int target, List<String> claimants) {
+        LinkedList<String> queue = mergeQueues.get(Integer.valueOf(target));
+        if (queue == null) {
+            queue = new LinkedList<String>();
+            mergeQueues.put(Integer.valueOf(target), queue);
+        }
+        for (String claimant : claimants) {
+            if (!queue.contains(claimant)) {
+                queue.addLast(claimant);
+            }
+        }
     }
 
     private void removeFromQueues(String trainName) {
