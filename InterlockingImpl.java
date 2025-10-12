@@ -75,6 +75,9 @@ public class InterlockingImpl implements Interlocking {
     private static boolean isFreight(String name)   { return name != null && name.startsWith("F"); }
     private static boolean isPassengerSection(int section) { return PASSENGER_SECTIONS.contains(section); }
     private static boolean isFreightSection(int section)   { return FREIGHT_SECTIONS.contains(section); }
+    private static boolean isExitSection(int section) {
+        return SOUTH_EXIT.contains(section) || NORTH_EXIT.contains(section);
+    }
 
     // ---- Helpers (occupancy + movement)
     private boolean isSectionFree(int sectionId) {
@@ -130,7 +133,7 @@ public class InterlockingImpl implements Interlocking {
 
         trainDest.put(trainName, destinationTrackSection);
         occupy(entryTrackSection, trainName);
-        if (entryTrackSection == destinationTrackSection) exitReady.add(trainName);
+        if (entryTrackSection == destinationTrackSection && isExitSection(destinationTrackSection)) exitReady.add(trainName);
     }
 
     @Override
@@ -247,8 +250,11 @@ public class InterlockingImpl implements Interlocking {
             vacate(from);
             occupy(to, t);
             moved++;
-            if (trainDest.get(t) != null && to == trainDest.get(t)) {
-                exitReady.add(t);
+            Integer dest = trainDest.get(t);
+            if (dest != null && to == dest.intValue()) {
+                if (isExitSection(dest.intValue())) {
+                    exitReady.add(t);
+                }
                 removeFromQueues(t);
             }
         }

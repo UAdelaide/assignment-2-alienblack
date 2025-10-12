@@ -74,7 +74,7 @@ The test names align with the assignment rubric (routing, crossing priority, mer
 - **Routing**: Legal paths are precomputed by BFS within each subnet (passenger vs freight) based on the simplified adjacency (single-direction itineraries listed in `design-notes.md`).
 - **Crossing priority**: Only one crossing move is granted per tick; passenger trains win against freight when both request the diamond simultaneously.
 - **Fair merges**: Sections 6 (passenger northbound funnel) and 7 (freight bi-directional funnel) use round-robin queues to avoid starvation.
-- **Exit handling**: Trains reaching their destination remain in place until their next move request, then vacate after the rest of the tick’s arbitration so followers do not slip into the same section prematurely.
+- **Exit handling**: Trains vacate only when their destination is an official exit (2,3,4,8,9,11); otherwise they remain in place. Exit-ready trains still hold the block until the rest of the tick’s arbitration completes.
 - **Outcome diagnostics**: `getLastOutcome()` reports `PROGRESS`, `BLOCKED`, or `DEADLOCK`, with policy-only stalls classified as `BLOCKED`.
 
 For a deeper explanation, see `docs/design-notes.md`.

@@ -39,7 +39,7 @@ Entry/exit rules from the brief:
 - Crossing still uses passenger-first rather than the fairness token.
 
 **Exit-on-next-move**  
-- Arrival at the destination section arms an `exit_ready` token. On the next `moveTrains` call the train consumes `exit_ready`, frees its section, and leaves the corridor (reporting `-1` via `getTrain`).
+- Arrival at an exit section (`{2,3,4,8,9,11}`) arms an `exit_ready` token. On the next `moveTrains` call the train consumes the token, frees its section, and leaves the corridor. Destinations that are not legal exits remain occupied.
 
 **Deadlock signalling**  
 - Each `moveTrains` call reports an `Outcome` stored in `getLastOutcome()`. “Deadlock” is raised when at least one train requested movement but all were blocked (occupancy or policy). “Blocked” captures idle ticks (no requests). Tests use this to assert behaviours.
