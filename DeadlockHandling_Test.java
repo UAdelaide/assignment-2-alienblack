@@ -14,7 +14,7 @@ public class DeadlockHandling_Test {
 
         int moved = sys.moveTrains(new String[]{"F1", "F2"});
         assertEquals(0, moved);
-        assertEquals(InterlockingImpl.Outcome.DEADLOCK, sys.getLastOutcome());
+        assertEquals(InterlockingImpl.Outcome.COLLISION, sys.getLastOutcome());
     }
 
     @Test
