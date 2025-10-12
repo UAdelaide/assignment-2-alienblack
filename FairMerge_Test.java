@@ -18,12 +18,11 @@ public class FairMerge_Test {
         int movedSingle = sys.moveTrains(new String[]{"P9"});
         assertEquals(1, movedSingle);
         assertEquals(6, sys.getTrain("P9"));
-        sys.moveTrains(new String[]{"P9"}); // 6 -> 2
-        assertEquals(2, sys.getTrain("P9"));
-        sys.moveTrains(new String[]{"P9"}); // exit
+        int movedToExit = sys.moveTrains(new String[]{"P9"}); // 6 -> 2 (exit)
+        assertEquals(1, movedToExit);
         try {
             sys.getTrain("P9");
-            fail("Train should have exited corridor");
+            fail("Train should exit immediately upon reaching section 2");
         } catch (IllegalArgumentException expected) {
             // expected
         }

@@ -20,7 +20,6 @@ public class Main {
 
         moved = impl.moveTrains(new String[]{"P1"});
         System.out.println("Passenger steps toward exit (moved=" + moved + ")");
-        moved = impl.moveTrains(new String[]{"P1"});
-        System.out.println("Passenger exits (moved=" + moved + ")");
+        System.out.println("Passenger exits immediately (train removed from corridor)");
     }
 }

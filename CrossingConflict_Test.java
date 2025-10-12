@@ -15,12 +15,23 @@ public class CrossingConflict_Test {
         assertEquals(3, sys.getTrain("F7"));
 
         // Passenger clears the crossing area on the next move
-        sys.moveTrains(new String[]{"P1"});
-        assertEquals(8, sys.getTrain("P1"));
+        int passengerMove = sys.moveTrains(new String[]{"P1"});
+        assertEquals(1, passengerMove);
+        try {
+            sys.getTrain("P1");
+            fail("Passenger should exit immediately after reaching section 8");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
 
         // Now freight should be able to proceed through the crossing
         moved = sys.moveTrains(new String[]{"F7"});
         assertEquals(1, moved);
-        assertEquals(4, sys.getTrain("F7"));
+        try {
+            sys.getTrain("F7");
+            fail("Freight should exit immediately after reaching section 4");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
     }
 }

@@ -21,6 +21,11 @@ public class PriorityAndCrossing_Test {
         sys.addTrain("F7", 3, 4);
         int moved = sys.moveTrains(new String[]{"F7"});
         assertEquals(1, moved);
-        assertEquals(4, sys.getTrain("F7"));
+        try {
+            sys.getTrain("F7");
+            fail("Freight should exit immediately after reaching section 4");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
     }
 }
