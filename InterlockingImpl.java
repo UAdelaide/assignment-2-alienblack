@@ -112,7 +112,9 @@ public class InterlockingImpl implements Interlocking {
     private void updateExitReadiness(String trainName) {
         Integer section = trainSection.get(trainName);
         Integer dest = trainDest.get(trainName);
-        if (section != null && dest != null && section.intValue() == dest.intValue()) {
+        if (section != null && dest != null
+                && section.intValue() == dest.intValue()
+                && isExitSection(dest.intValue())) {
             exitReady.add(trainName);
         } else {
             exitReady.remove(trainName);
