@@ -384,7 +384,15 @@ public class InterlockingImpl implements Interlocking {
             moved++;
             Integer dest = trainDest.get(t);
             if (dest != null && to == dest.intValue()) {
-                removeFromQueues(t);
+                if (isExitSection(dest.intValue())) {
+                    removeFromQueues(t);
+                    vacate(to);
+                    trainDest.remove(t);
+                    passengerTrain.remove(t);
+                    exitReady.remove(t);
+                } else {
+                    removeFromQueues(t);
+                }
             }
         }
         for (String t : exitingTrains) {
