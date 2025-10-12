@@ -242,7 +242,9 @@ public class InterlockingImpl implements Interlocking {
                 String occupier = sectionOwner.get(target.intValue());
                 if (occupier != null && !exitingTrains.contains(occupier)) {
                     blockedByOccupancy = true;
-                    if (batch.contains(occupier) && !candidates.contains(occupier)) {
+                    if (batch.contains(occupier)
+                            && nextSection.get(occupier) != null
+                            && !candidates.contains(occupier)) {
                         dependencyCycle = true;
                     }
                 }
