@@ -1,4 +1,23 @@
-# Petri-net Design (v2 — student notes)
+# Petri-net Design (v3 — final layout, progress log)
+
+## Progress update — final Petri-net layout
+
+**Sections**  
+Uni-directional segments: 1, 2, 5, 6, 8, and 10. Each uses a single place keyed to its legal travel direction: `S01_S`, `S05_S`, and `S08_S` track southbound occupancy, while `S02_N`, `S06_N`, and `S10_N` record northbound flow.
+
+Bi-directional segments: 4, 7, 9, and 11. Each carries a matched pair of places (`S04_S`/`S04_N`, `S07_S`/`S07_N`, `S09_S`/`S09_N`, `S11_S`/`S11_N`) so we can reason about opposing moves independently.
+
+Section 3 hosts three distinct flows, so we model it with three places: `S03S4` for traffic heading south to 4, `S03S5` for the alternate southbound hop into 5, and `S03N5` for trains returning north from 5 to 3.
+
+Tokens in any `Sxx_*` place continue to mean "section xx is occupied in that direction or flow".
+
+**Entries and exits**  
+Entries remain the transitions `en01S`, `en03S`, `en04N`, `en09N`, `en10N`, and `en11N`. Exits fire through `ex02N`, `ex08S`, `ex09S`, `ex04S`, `ex11S`, and `ex03N`.
+
+**In-network moves**  
+We keep the short verb syntax `m<from>_<to><Dir>`, e.g. `m03_04S`, `m04_03N`, `m01_05S`, `m05_08S`, `m05_09S`, `m09_06N`, `m10_06N`, and `m06_02N`. The suffix captures the direction encoded in the section place names.
+
+This logs the final Petri-net structure we will ship and keeps the progress narrative in sync with the submission plan.
 
 ## Snapshot summary
 - Corridor = 11 numbered sections. Passenger trains stay within {1,2,5,6,8,9,10}; freight trains remain in {3,4,7,11}. No legal move switches line sets.
