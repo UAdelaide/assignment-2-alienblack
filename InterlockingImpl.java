@@ -160,6 +160,7 @@ public class InterlockingImpl implements Interlocking {
         boolean anyRequests = false;
         boolean blockedByOccupancy = false;
         boolean blockedByPolicy = false;
+        boolean blockedByExitReady = false;
 
         for (String t : trainNames) {
             if (exitReady.contains(t)) {
@@ -178,6 +179,10 @@ public class InterlockingImpl implements Interlocking {
             if (next == from) continue;           // no progress
             anyRequests = true;
             if (!isSectionFree(next)) {
+                String occupier = sectionOwner.get(next);
+                if (occupier != null && exitReady.contains(occupier)) {
+                    blockedByExitReady = true;
+                }
                 blockedByOccupancy = true;
                 continue;   // blocked by occupancy
             }
@@ -272,9 +277,9 @@ public class InterlockingImpl implements Interlocking {
         }
         if (moved > 0) {
             lastOutcome = Outcome.PROGRESS;
-        } else if (anyRequests && blockedByOccupancy) {
+        } else if (anyRequests && blockedByOccupancy && !blockedByExitReady) {
             lastOutcome = Outcome.DEADLOCK;
-        } else if (anyRequests && blockedByPolicy) {
+        } else if (anyRequests && (blockedByPolicy || blockedByExitReady)) {
             lastOutcome = Outcome.BLOCKED;
         } else {
             lastOutcome = Outcome.BLOCKED;
