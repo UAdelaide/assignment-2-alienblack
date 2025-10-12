@@ -49,6 +49,8 @@ public class InterlockingImpl implements Interlocking {
     private final Map<String, Integer> trainSection = new HashMap<String, Integer>();
     /** trainName -> destination sectionId */
     private final Map<String, Integer> trainDest = new HashMap<String, Integer>();
+    /** trainName -> true if passenger line, false if freight */
+    private final Map<String, Boolean> passengerTrain = new HashMap<String, Boolean>();
     /** trains that must exit on their next move */
     private final Set<String> exitReady = new HashSet<String>();
     /** fairness queues for non-crossing merges */
@@ -71,13 +73,15 @@ public class InterlockingImpl implements Interlocking {
         return southbound ? SOUTH_EXIT.contains(section) : NORTH_EXIT.contains(section);
     }
 
-    private static boolean isPassenger(String name) { return name != null && name.startsWith("P"); }
-    @SuppressWarnings("unused")
-    private static boolean isFreight(String name)   { return name != null && name.startsWith("F"); }
     private static boolean isPassengerSection(int section) { return PASSENGER_SECTIONS.contains(section); }
     private static boolean isFreightSection(int section)   { return FREIGHT_SECTIONS.contains(section); }
     private static boolean isExitSection(int section) {
         return SOUTH_EXIT.contains(section) || NORTH_EXIT.contains(section);
+    }
+
+    private boolean isPassengerTrain(String trainName) {
+        Boolean flag = passengerTrain.get(trainName);
+        return flag != null && flag.booleanValue();
     }
 
     // ---- Helpers (occupancy + movement)
@@ -127,12 +131,10 @@ public class InterlockingImpl implements Interlocking {
         if (trainDest.containsKey(trainName))
             throw new IllegalStateException("Train already exists: " + trainName);
 
-        if (isPassenger(trainName)) {
-            if (!isPassengerSection(entryTrackSection) || !isPassengerSection(destinationTrackSection))
-                throw new IllegalArgumentException("Passenger train cannot use freight sections");
-        } else if (isFreight(trainName)) {
-            if (!isFreightSection(entryTrackSection) || !isFreightSection(destinationTrackSection))
-                throw new IllegalArgumentException("Freight train cannot use passenger sections");
+        boolean passengerLine = isPassengerSection(entryTrackSection) && isPassengerSection(destinationTrackSection);
+        boolean freightLine = isFreightSection(entryTrackSection) && isFreightSection(destinationTrackSection);
+        if (!passengerLine && !freightLine) {
+            throw new IllegalArgumentException("Train must remain on a single corridor line");
         }
 
         boolean southbound = isSouthbound(entryTrackSection, destinationTrackSection);
@@ -146,6 +148,7 @@ public class InterlockingImpl implements Interlocking {
             throw new IllegalArgumentException("No route from entry to destination");
 
         trainDest.put(trainName, destinationTrackSection);
+        passengerTrain.put(trainName, Boolean.valueOf(passengerLine));
         occupy(entryTrackSection, trainName);
     }
 
@@ -385,6 +388,7 @@ public class InterlockingImpl implements Interlocking {
         for (String t : exitingTrains) {
             exitReady.remove(t);
             trainDest.remove(t);
+            passengerTrain.remove(t);
             removeFromQueues(t);
             moved++;
         }
@@ -432,7 +436,7 @@ public class InterlockingImpl implements Interlocking {
 
     private String chooseCrossingWinner(List<String> trains) {
         for (String t : trains) {
-            if (isPassenger(t)) {
+            if (isPassengerTrain(t)) {
                 return t;
             }
         }
