@@ -3,7 +3,7 @@
 ## Snapshot summary
 - Corridor = 11 numbered sections. Passenger trains stay within {1,2,5,6,8,9,10}; freight trains remain in {3,4,7,11}. No legal move switches line sets.
 - Crossing mutex covers the geometric clash between edges `1↔5`, `2↔6`, and `3↔4`; passenger trains win when contending with freight. Only one crossing move fires per tick.
-- Non-crossing merges at sections **6** (northbound funnel from entries 9 & 10) and **9** (southbound funnel from sections 5 & 6) use a round-robin token so trains alternate access.
+- Non-crossing merges live at **6** (northbound funnel from entries 9 & 10) and **7** (freight funnel between southbound 3→11 and northbound 11→3). Each uses a round-robin token so rivals alternate access.
 - When a train enters its destination section it stays there until the next `moveTrains` call, then exits (matching the assignment brief).
 - Deadlock handling now classifies “no progress” ticks (`Outcome` ∈ {PROGRESS, BLOCKED, DEADLOCK}) so tests can verify when the network is stuck.
 
@@ -14,13 +14,13 @@
 | 1       | Passenger | 5                | South passenger entry |
 | 2       | Passenger | 6                | South passenger entry / north exit |
 | 3       | Freight   | 4, 7             | South freight entry / north exit |
-| 4       | Freight   | 3, 7             | Workshops spur; part of crossing |
-| 5       | Passenger | 1, 8, 9          | Passenger trunk; part of crossing |
-| 6       | Passenger | 2, 9, 10         | Passenger trunk; part of crossing & merge |
-| 7       | Freight   | 3, 4, 11         | Freight trunk merge |
+| 4       | Freight   | 3                | Freight spur; part of crossing |
+| 5       | Passenger | 8, 9, 1          | Passenger trunk; part of crossing |
+| 6       | Passenger | 2                | Passenger trunk; part of crossing & merge |
+| 7       | Freight   | 3, 11            | Freight trunk merge |
 | 8       | Passenger | 5                | Passenger exit (east) |
-| 9       | Passenger | 5, 6             | Passenger merge/diverge |
-| 10      | Passenger | 6                | Passenger entry (north) |
+| 9       | Passenger | 5, 6             | Passenger diverge (5→9) and northbound approach (9→6) |
+| 10      | Passenger | 6                | Passenger entry (north) feeding merge at 6 |
 | 11      | Freight   | 7                | Freight exit (east) |
 
 Entry/exit rules from the brief:
@@ -34,8 +34,8 @@ Entry/exit rules from the brief:
 - If both passenger and freight request the mutex in the same tick, the passenger move fires. Same-type clashes release no more than one train per tick.  
 - Crossing arbitration happens before regular target-based conflict handling.
 
-**Fair merges (implemented in code)**  
-- Sections 6 and 9 each own a logical token (`Merge6_turn`, `Merge9_turn`) that rotates across contending trains (round robin). This prevents starvation when two independent approaches want the same section.  
+- **Fair merges (implemented in code)**  
+- Sections 6 and 7 each own a logical token (`Merge6_turn`, `Merge7_turn`) that rotates across contending trains (round robin). This prevents starvation when independent approaches want the same section.  
 - Crossing still uses passenger-first rather than the fairness token.
 
 **Exit-on-next-move**  
@@ -88,7 +88,7 @@ Routing uses a precomputed BFS from each section to every reachable destination 
    - Exit on next move verified (`MovePhase1_Test`, `RoutingRules_Test`, etc.).
 2. **Phase 2 (crossing + fairness)**  
    - Passenger beats freight at crossing; freight only moves when passenger absent/cleared (`PriorityAndCrossing_Test`, `CrossingConflict_Test`).  
-   - Round-robin merge scheduling at section 6 (`FairMerge_Test`).  
+   - Round-robin merge scheduling at sections 6 and 7 (`FairMerge_Test`).  
    - All prior tests kept green.
 3. **Phase 3 (deadlock)**  
    - Detect stalemates (e.g., opposing freights on 3↔7↔11).  

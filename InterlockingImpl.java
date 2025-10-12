@@ -27,17 +27,15 @@ public class InterlockingImpl implements Interlocking {
     private static final Set<Integer> PASSENGER_SECTIONS = new HashSet<Integer>(Arrays.asList(1, 2, 5, 6, 8, 9, 10));
     private static final Set<Integer> FREIGHT_SECTIONS   = new HashSet<Integer>(Arrays.asList(3, 4, 7, 11));
     private static final Map<Integer, Map<Integer, List<Integer>>> ROUTES;
-    private static final Set<Integer> FAIR_MERGE_TARGETS = new HashSet<Integer>(Arrays.asList(6, 7, 9));
+    private static final Set<Integer> FAIR_MERGE_TARGETS = new HashSet<Integer>(Arrays.asList(6, 7));
     static {
         NEXT_HOPS.put(1, Arrays.asList(5));
-        NEXT_HOPS.put(2, Arrays.asList(6));
         NEXT_HOPS.put(3, Arrays.asList(4, 7));
-        NEXT_HOPS.put(4, Arrays.asList(3, 7));
-        NEXT_HOPS.put(5, Arrays.asList(1, 8, 9));
-        NEXT_HOPS.put(6, Arrays.asList(2, 9, 10));
-        NEXT_HOPS.put(7, Arrays.asList(3, 4, 11));
-        NEXT_HOPS.put(8, Arrays.asList(5));
-        NEXT_HOPS.put(9, Arrays.asList(5, 6));
+        NEXT_HOPS.put(4, Arrays.asList(3));
+        NEXT_HOPS.put(5, Arrays.asList(8, 9));
+        NEXT_HOPS.put(6, Arrays.asList(2));
+        NEXT_HOPS.put(7, Arrays.asList(3, 11));
+        NEXT_HOPS.put(9, Arrays.asList(6));
         NEXT_HOPS.put(10, Arrays.asList(6));
         NEXT_HOPS.put(11, Arrays.asList(7));
         ROUTES = computeRoutes();
@@ -152,6 +150,7 @@ public class InterlockingImpl implements Interlocking {
 
         int moved = 0;
         List<String> exiting = new ArrayList<String>();
+        Map<String,Integer> exitPositions = new HashMap<String,Integer>();
 
         Map<String,Integer> desired = new LinkedHashMap<String,Integer>();
         Map<String,int[]> desiredEdges = new HashMap<String,int[]>();
@@ -162,11 +161,12 @@ public class InterlockingImpl implements Interlocking {
         for (String t : trainNames) {
             if (exitReady.contains(t)) {
                 Integer current = trainSection.get(t);
-                if (current != null && current.intValue() >= 0) {
-                    vacate(current.intValue());
+                if (current != null) {
+                    exitPositions.put(t, current);
                 }
                 removeFromQueues(t);
                 exiting.add(t);
+                anyRequests = true;
                 continue;
             }
             int from = trainSection.get(t);
@@ -255,6 +255,10 @@ public class InterlockingImpl implements Interlocking {
 
         // Process exits after movement
         for (String t : exiting) {
+            Integer section = exitPositions.get(t);
+            if (section != null) {
+                vacate(section.intValue());
+            }
             exitReady.remove(t);
             trainDest.remove(t);
             removeFromQueues(t);
@@ -262,8 +266,10 @@ public class InterlockingImpl implements Interlocking {
         }
         if (moved > 0) {
             lastOutcome = Outcome.PROGRESS;
-        } else if (anyRequests && (blockedByOccupancy || blockedByPolicy)) {
+        } else if (anyRequests && blockedByOccupancy) {
             lastOutcome = Outcome.DEADLOCK;
+        } else if (anyRequests && blockedByPolicy) {
+            lastOutcome = Outcome.BLOCKED;
         } else {
             lastOutcome = Outcome.BLOCKED;
         }
