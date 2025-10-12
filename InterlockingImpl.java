@@ -138,58 +138,149 @@ public class InterlockingImpl implements Interlocking {
 
     @Override
     public int moveTrains(String[] trainNames) throws IllegalArgumentException {
-        if (trainNames == null) throw new IllegalArgumentException("trainNames must not be null");
-
-        // validate inputs & duplicates
+        if (trainNames == null) {
+            throw new IllegalArgumentException("trainNames must not be null");
+        }
+        // validate inputs and detect duplicates
         Set<String> seen = new HashSet<String>();
         for (String name : trainNames) {
-            if (name == null || name.trim().isEmpty())
+            if (name == null || name.trim().isEmpty()) {
                 throw new IllegalArgumentException("train name in batch is empty");
-            if (!trainDest.containsKey(name))
+            }
+            if (!trainDest.containsKey(name)) {
                 throw new IllegalArgumentException("train not active in corridor: " + name);
-            if (!seen.add(name))
+            }
+            if (!seen.add(name)) {
                 throw new IllegalArgumentException("duplicate train in batch: " + name);
+            }
         }
 
-        int moved = 0;
-        List<String> exiting = new ArrayList<String>();
+        // record trains that will exit in this cycle and pre-vacate their sections for planning
+        Set<String> exitingTrains = new HashSet<String>();
         Map<String,Integer> exitPositions = new HashMap<String,Integer>();
-
-        Map<String,Integer> desired = new LinkedHashMap<String,Integer>();
-        Map<String,int[]> desiredEdges = new HashMap<String,int[]>();
-        boolean anyRequests = false;
-        boolean blockedByOccupancy = false;
-        boolean blockedByPolicy = false;
-        boolean blockedByExitReady = false;
-
+        // copy current ownership map for planning (we'll modify a local copy when simulating moves)
+        Map<Integer,String> currentOwner = new HashMap<Integer,String>(sectionOwner);
+        // pre-vacate exit-ready sections in the planning map
         for (String t : trainNames) {
             if (exitReady.contains(t)) {
-                Integer current = trainSection.get(t);
-                if (current != null) {
-                    exitPositions.put(t, current);
+                Integer pos = trainSection.get(t);
+                if (pos != null) {
+                    exitingTrains.add(t);
+                    exitPositions.put(t, pos);
+                    // remove from planning occupancy so that other trains can plan to move into it
+                    currentOwner.remove(pos);
                 }
-                removeFromQueues(t);
-                exiting.add(t);
+            }
+        }
+
+        // compute tentative next moves for every train
+        Map<String,Integer> nextSection = new HashMap<String,Integer>();
+        boolean anyRequests = false;
+        for (String t : trainNames) {
+            if (exitingTrains.contains(t)) {
+                // exit trains have no next section (they leave the map)
+                nextSection.put(t, null);
                 anyRequests = true;
                 continue;
             }
             int from = trainSection.get(t);
             int dest = trainDest.get(t);
             int next = pickNext(from, dest);
-            if (next == from) continue;           // no progress
-            anyRequests = true;
-            if (!isSectionFree(next)) {
-                String occupier = sectionOwner.get(next);
-                if (occupier != null && exitReady.contains(occupier)) {
-                    blockedByExitReady = true;
-                }
-                blockedByOccupancy = true;
-                continue;   // blocked by occupancy
+            if (next != from) {
+                nextSection.put(t, Integer.valueOf(next));
+                anyRequests = true;
             }
-            desired.put(t, Integer.valueOf(next));
-            desiredEdges.put(t, new int[]{from, next});
         }
 
+        // build initial candidate moves, allowing moves into sections whose occupier is either exiting or also moving away
+        Map<String,Integer> candidates = new LinkedHashMap<String,Integer>();
+        boolean blockedByOccupancy = false;
+        for (String t : trainNames) {
+            Integer next = nextSection.get(t);
+            if (next == null) {
+                continue;
+            }
+            int target = next.intValue();
+            String occupier = currentOwner.get(target);
+            if (occupier == null) {
+                // completely free
+                candidates.put(t, Integer.valueOf(target));
+                // update planning occupancy: mark this train as moving away and occupying its target
+                int from = trainSection.get(t);
+                currentOwner.remove(from);
+                currentOwner.put(target, t);
+            } else if (exitingTrains.contains(occupier)) {
+                // target is occupied by an exiting train; allow move
+                candidates.put(t, Integer.valueOf(target));
+                int from = trainSection.get(t);
+                currentOwner.remove(from);
+                currentOwner.put(target, t);
+            } else {
+                // target may be occupied by another train; defer decision to check if that train is also moving away
+                // we will check swap/collision conditions later
+                blockedByOccupancy = true;
+            }
+        }
+
+        // allow moves into sections whose current occupier is also scheduled to move away
+        // second pass to handle chain moves regardless of input order
+        for (String t : trainNames) {
+            // skip if already a candidate or exiting
+            if (candidates.containsKey(t) || exitingTrains.contains(t)) {
+                continue;
+            }
+            Integer next = nextSection.get(t);
+            if (next == null) {
+                continue;
+            }
+            int target = next.intValue();
+            // check if target is occupied by a train whose next move is not null (i.e., is moving away)
+            String occupier = sectionOwner.get(target);
+            if (occupier != null) {
+                Integer occupierNext = nextSection.get(occupier);
+                if (occupierNext != null) {
+                    // occupier will move; allow this move
+                    candidates.put(t, Integer.valueOf(target));
+                }
+            }
+        }
+
+        // detect swap collisions: two trains wanting to swap each other's sections
+        Set<String> collisionTrains = new HashSet<String>();
+        for (Map.Entry<String,Integer> e : candidates.entrySet()) {
+            String t = e.getKey();
+            int target = e.getValue().intValue();
+            String occupier = sectionOwner.get(target);
+            if (occupier != null) {
+                Integer occupierTarget = candidates.get(occupier);
+                if (occupierTarget != null) {
+                    int occupierNext = occupierTarget.intValue();
+                    int fromT = trainSection.get(t);
+                    if (occupierNext == fromT) {
+                        // t and occupier want to swap
+                        collisionTrains.add(t);
+                        collisionTrains.add(occupier);
+                    }
+                }
+            }
+        }
+        if (!collisionTrains.isEmpty()) {
+            // remove both trains involved in collision from candidates
+            for (String t : collisionTrains) {
+                candidates.remove(t);
+            }
+        }
+
+        // build desiredEdges for candidates
+        Map<String,int[]> desiredEdges = new HashMap<String,int[]>();
+        for (Map.Entry<String,Integer> entry : candidates.entrySet()) {
+            String t = entry.getKey();
+            int from = trainSection.get(t);
+            int to = entry.getValue().intValue();
+            desiredEdges.put(t, new int[]{from, to});
+        }
+
+        // handle crossing conflicts: only one train may traverse a crossing edge in a cycle
         List<String> crossingTrains = new ArrayList<String>();
         for (Map.Entry<String,int[]> entry : desiredEdges.entrySet()) {
             int[] edge = entry.getValue();
@@ -197,61 +288,57 @@ public class InterlockingImpl implements Interlocking {
                 crossingTrains.add(entry.getKey());
             }
         }
+        boolean blockedByPolicy = false;
         if (crossingTrains.size() > 1) {
             String winner = chooseCrossingWinner(crossingTrains);
             for (String t : crossingTrains) {
                 if (!t.equals(winner)) {
-                    desired.remove(t);
+                    candidates.remove(t);
                     desiredEdges.remove(t);
                     blockedByPolicy = true;
                 }
             }
         }
 
+        // handle merge fairness (6 and 7): if multiple trains target same merge section, choose fairly
         Map<Integer,List<String>> targetClaims = new HashMap<Integer,List<String>>();
-        for (Map.Entry<String,Integer> entry : desired.entrySet()) {
-            int target = entry.getValue().intValue();
-            List<String> list = targetClaims.get(target);
-            if (list == null) {
-                list = new ArrayList<String>();
-                targetClaims.put(target, list);
-            }
-            list.add(entry.getKey());
+        for (String t : candidates.keySet()) {
+            int target = candidates.get(t).intValue();
+            targetClaims.computeIfAbsent(target, k -> new ArrayList<String>()).add(t);
         }
-
         Map<String,Integer> granted = new HashMap<String,Integer>();
-
         for (Map.Entry<Integer,List<String>> entry : targetClaims.entrySet()) {
             int target = entry.getKey().intValue();
             List<String> claimants = entry.getValue();
             cleanupMergeQueue(target, claimants);
-
             if (claimants.size() == 1) {
                 granted.put(claimants.get(0), Integer.valueOf(target));
-                continue;
-            }
-
-            if (isFairMergeTarget(target)) {
-                String winner = selectFairWinner(target, claimants);
-                if (winner != null) {
-                    granted.put(winner, Integer.valueOf(target));
-                    if (claimants.size() > 1) {
-                        blockedByPolicy = true;
+            } else {
+                if (isFairMergeTarget(target)) {
+                    String winner = selectFairWinner(target, claimants);
+                    if (winner != null) {
+                        granted.put(winner, Integer.valueOf(target));
+                        if (claimants.size() > 1) {
+                            blockedByPolicy = true;
+                        }
                     }
+                } else {
+                    // deny all for non-fair merge targets
+                    blockedByPolicy = true;
                 }
-                continue;
             }
-            // non-crossing multi-claim: deny all (no grant)
-            blockedByPolicy = true;
         }
 
-        // Apply granted moves atomically
-        for (Map.Entry<String,Integer> g : granted.entrySet()) {
-            String t = g.getKey();
-            int to = g.getValue().intValue();
-            // still free?
-            if (!isSectionFree(to) && !t.equals(sectionOwner.get(to))) continue;
+        // apply granted moves atomically
+        int moved = 0;
+        for (Map.Entry<String,Integer> e : granted.entrySet()) {
+            String t = e.getKey();
+            int to = e.getValue().intValue();
             int from = trainSection.get(t);
+            // ensure the target is still free or occupied by this train (in case of chain moves)
+            if (!isSectionFree(to) && !t.equals(sectionOwner.get(to)) && !exitingTrains.contains(sectionOwner.get(to))) {
+                continue;
+            }
             vacate(from);
             occupy(to, t);
             moved++;
@@ -263,9 +350,8 @@ public class InterlockingImpl implements Interlocking {
                 removeFromQueues(t);
             }
         }
-
-        // Process exits after movement
-        for (String t : exiting) {
+        // finally process exits
+        for (String t : exitingTrains) {
             Integer section = exitPositions.get(t);
             if (section != null) {
                 vacate(section.intValue());
@@ -275,11 +361,13 @@ public class InterlockingImpl implements Interlocking {
             removeFromQueues(t);
             moved++;
         }
+        // set lastOutcome appropriately
         if (moved > 0) {
             lastOutcome = Outcome.PROGRESS;
-        } else if (anyRequests && blockedByOccupancy && !blockedByExitReady) {
+        } else if (anyRequests && !candidates.isEmpty() && collisionTrains.isEmpty()) {
+            // if no one moved but there were requests and no collisions, it's a deadlock
             lastOutcome = Outcome.DEADLOCK;
-        } else if (anyRequests && (blockedByPolicy || blockedByExitReady)) {
+        } else if (anyRequests && (blockedByPolicy || !collisionTrains.isEmpty() || blockedByOccupancy)) {
             lastOutcome = Outcome.BLOCKED;
         } else {
             lastOutcome = Outcome.BLOCKED;
