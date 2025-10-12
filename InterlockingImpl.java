@@ -5,7 +5,6 @@ import java.util.*;
  * - Tracks which train is in which section (single-occupancy).
  * - Validates legal entry/exit sections.
  * - moveTrains: adjacency + single-occupancy, atomic apply, deny same-target conflicts.
- * - Same-tick exit when a train moves into its legal exit section.
  * - No Java 9+/11 APIs (uses Arrays.asList / Collections.emptyList and trim().isEmpty()).
  */
 public class InterlockingImpl implements Interlocking {
@@ -51,6 +50,8 @@ public class InterlockingImpl implements Interlocking {
     private final Map<String, Integer> trainDest = new HashMap<String, Integer>();
     /** trainName -> true if passenger line, false if freight */
     private final Map<String, Boolean> passengerTrain = new HashMap<String, Boolean>();
+    /** trains that must exit on their next move */
+    private final Set<String> exitReady = new HashSet<String>();
     /** fairness queues for non-crossing merges */
     private final Map<Integer, LinkedList<String>> mergeQueues = new HashMap<Integer, LinkedList<String>>();
     /** last movement outcome for diagnostics */
@@ -89,11 +90,13 @@ public class InterlockingImpl implements Interlocking {
     private void occupy(int sectionId, String trainName) {
         sectionOwner.put(sectionId, trainName);
         trainSection.put(trainName, sectionId);
+        updateExitReadiness(trainName);
     }
     private void vacate(int sectionId) {
         String t = sectionOwner.remove(sectionId);
         if (t != null) {
             trainSection.remove(t);
+            exitReady.remove(t);
         }
     }
     private int pickNext(int from, int dest) {
@@ -103,6 +106,18 @@ public class InterlockingImpl implements Interlocking {
         List<Integer> path = destMap.get(dest);
         if (path == null || path.size() < 2) return from;
         return path.get(1);
+    }
+
+    private void updateExitReadiness(String trainName) {
+        Integer section = trainSection.get(trainName);
+        Integer dest = trainDest.get(trainName);
+        if (section != null && dest != null
+                && section.intValue() == dest.intValue()
+                && isExitSection(dest.intValue())) {
+            exitReady.add(trainName);
+        } else {
+            exitReady.remove(trainName);
+        }
     }
 
     // ---- Interlocking API
@@ -157,10 +172,28 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
+        // record trains that will exit in this cycle
+        Set<String> exitingTrains = new HashSet<String>();
+        Map<String,Integer> exitPositions = new HashMap<String,Integer>();
+        for (String t : batch) {
+            if (exitReady.contains(t)) {
+                Integer pos = trainSection.get(t);
+                if (pos != null) {
+                    exitingTrains.add(t);
+                    exitPositions.put(t, pos);
+                }
+            }
+        }
+
         // compute tentative next moves for every train
         Map<String,Integer> nextSection = new HashMap<String,Integer>();
         boolean anyRequests = false;
         for (String t : batch) {
+            if (exitingTrains.contains(t)) {
+                nextSection.put(t, null);
+                anyRequests = true;
+                continue;
+            }
             int from = trainSection.get(t);
             int dest = trainDest.get(t);
             int next = pickNext(from, dest);
@@ -171,7 +204,7 @@ public class InterlockingImpl implements Interlocking {
         }
 
         // start with every train that requested a move and iteratively prune the ones
-        // whose targets will not be vacated by a moving train this tick
+        // whose targets will not be vacated by an exiting or moving train
         Set<String> candidates = new LinkedHashSet<String>();
         for (String t : batch) {
             if (nextSection.get(t) != null) {
@@ -190,7 +223,9 @@ public class InterlockingImpl implements Interlocking {
                     continue;
                 }
                 String occupier = sectionOwner.get(target.intValue());
-                if (occupier != null && !candidates.contains(occupier)) {
+                if (occupier != null
+                        && !exitingTrains.contains(occupier)
+                        && !candidates.contains(occupier)) {
                     it.remove();
                     changed = true;
                 }
@@ -200,11 +235,16 @@ public class InterlockingImpl implements Interlocking {
         boolean blockedByOccupancy = false;
         boolean dependencyCycle = false;
         for (String t : batch) {
+            if (exitingTrains.contains(t)) {
+                continue;
+            }
             Integer target = nextSection.get(t);
-            if (target == null) continue;
+            if (target == null) {
+                continue;
+            }
             if (!candidates.contains(t)) {
                 String occupier = sectionOwner.get(target.intValue());
-                if (occupier != null) {
+                if (occupier != null && !exitingTrains.contains(occupier)) {
                     blockedByOccupancy = true;
                     if (batch.contains(occupier)
                             && nextSection.get(occupier) != null
@@ -280,12 +320,7 @@ public class InterlockingImpl implements Interlocking {
         Map<Integer,List<String>> targetClaims = new HashMap<Integer,List<String>>();
         for (Map.Entry<String,Integer> entry : candidateTargets.entrySet()) {
             int target = entry.getValue().intValue();
-            List<String> list = targetClaims.get(target);
-            if (list == null) {
-                list = new ArrayList<String>();
-                targetClaims.put(target, list);
-            }
-            list.add(entry.getKey());
+            targetClaims.computeIfAbsent(target, k -> new ArrayList<String>()).add(entry.getKey());
         }
         Map<String,Integer> granted = new LinkedHashMap<String,Integer>();
         boolean localDeadlockOnMerge = false;
@@ -316,7 +351,9 @@ public class InterlockingImpl implements Interlocking {
                 String t = entry.getKey();
                 int target = entry.getValue().intValue();
                 String occupier = sectionOwner.get(target);
-                if (occupier != null && !granted.containsKey(occupier)) {
+                if (occupier != null
+                        && !exitingTrains.contains(occupier)
+                        && !granted.containsKey(occupier)) {
                     it.remove();
                     pruned = true;
                     blockedByOccupancy = true;
@@ -330,33 +367,31 @@ public class InterlockingImpl implements Interlocking {
         }
 
         int moved = 0;
-
-        // vacate all source sections atomically
         for (Map.Entry<String,Integer> entry : moveFrom.entrySet()) {
             vacate(entry.getValue().intValue());
         }
-
-        // apply moves and exit on arrival to a legal exit section
+        for (String t : exitingTrains) {
+            Integer section = exitPositions.get(t);
+            if (section != null) {
+                vacate(section.intValue());
+            }
+        }
         for (Map.Entry<String,Integer> entry : granted.entrySet()) {
             String t = entry.getKey();
             int to = entry.getValue().intValue();
             occupy(to, t);
             moved++;
-
             Integer dest = trainDest.get(t);
             if (dest != null && to == dest.intValue()) {
-                // same-tick exit if this destination is a legal exit section
-                if (isExitSection(dest.intValue())) {
-                    // remove train immediately
-                    vacate(to);
-                    trainDest.remove(t);
-                    passengerTrain.remove(t);
-                    removeFromQueues(t);
-                } else {
-                    // reached destination that is not an exit (e.g., section 5); stay put, clear fairness bias
-                    removeFromQueues(t);
-                }
+                removeFromQueues(t);
             }
+        }
+        for (String t : exitingTrains) {
+            exitReady.remove(t);
+            trainDest.remove(t);
+            passengerTrain.remove(t);
+            removeFromQueues(t);
+            moved++;
         }
 
         if (moved > 0) {
