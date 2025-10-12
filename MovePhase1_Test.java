@@ -48,6 +48,11 @@ public class MovePhase1_Test {
 
         int moved = sys.moveTrains(new String[]{"P1"}); // exit
         assertEquals(1, moved);
-        assertEquals(-1, sys.getTrain("P1"));
+        try {
+            sys.getTrain("P1");
+            fail("Train should have exited corridor");
+        } catch (IllegalArgumentException expected) {
+            // expected after exit
+        }
     }
 }

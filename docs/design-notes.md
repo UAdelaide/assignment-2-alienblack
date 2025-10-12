@@ -1,11 +1,30 @@
-# Petri-net Design (v2 — student notes)
+# Petri-net Design (v3 — final layout, progress log)
+
+## Progress update — final Petri-net layout
+
+**Sections**  
+Uni-directional segments: 1, 2, 5, 6, 8, and 10. Each uses a single place keyed to its legal travel direction: `S01_S`, `S05_S`, and `S08_S` track southbound occupancy, while `S02_N`, `S06_N`, and `S10_N` record northbound flow.
+
+Bi-directional segments: 4, 7, 9, and 11. Each carries a matched pair of places (`S04_S`/`S04_N`, `S07_S`/`S07_N`, `S09_S`/`S09_N`, `S11_S`/`S11_N`) so we can reason about opposing moves independently.
+
+Section 3 hosts three distinct flows, so we model it with three places: `S03S4` for traffic heading south to 4, `S03S5` for the alternate southbound hop into 5, and `S03N5` for trains returning north from 5 to 3.
+
+Tokens in any `Sxx_*` place continue to mean "section xx is occupied in that direction or flow".
+
+**Entries and exits**  
+Entries remain the transitions `en01S`, `en03S`, `en04N`, `en09N`, `en10N`, and `en11N`. Exits fire through `ex02N`, `ex08S`, `ex09S`, `ex04S`, `ex11S`, and `ex03N`.
+
+**In-network moves**  
+We keep the short verb syntax `m<from>_<to><Dir>`, e.g. `m03_04S`, `m04_03N`, `m01_05S`, `m05_08S`, `m05_09S`, `m09_06N`, `m10_06N`, and `m06_02N`. The suffix captures the direction encoded in the section place names.
+
+This logs the final Petri-net structure we will ship and keeps the progress narrative in sync with the submission plan.
 
 ## Snapshot summary
 - Corridor = 11 numbered sections. Passenger trains stay within {1,2,5,6,8,9,10}; freight trains remain in {3,4,7,11}. No legal move switches line sets.
 - Crossing mutex covers the geometric clash between edges `1↔5`, `2↔6`, and `3↔4`; passenger trains win when contending with freight. Only one crossing move fires per tick.
-- Non-crossing merges at sections **6** (northbound funnel from entries 9 & 10) and **9** (southbound funnel from sections 5 & 6) use a round-robin token so trains alternate access.
+- Non-crossing merges live at **6** (northbound funnel from entries 9 & 10) and **7** (freight funnel between southbound 3→11 and northbound 11→3). Each uses a round-robin token so rivals alternate access.
 - When a train enters its destination section it stays there until the next `moveTrains` call, then exits (matching the assignment brief).
-- Deadlock handling (phase 3) will classify “no enabled moves” states and apply a resolution policy; current code records zero moves but does not yet escalate.
+- Deadlock handling now classifies “no progress” ticks (`Outcome` ∈ {PROGRESS, BLOCKED, DEADLOCK}) so tests can verify when the network is stuck.
 
 ## 1. Track map (undirected adjacency)
 
@@ -14,13 +33,13 @@
 | 1       | Passenger | 5                | South passenger entry |
 | 2       | Passenger | 6                | South passenger entry / north exit |
 | 3       | Freight   | 4, 7             | South freight entry / north exit |
-| 4       | Freight   | 3, 7             | Workshops spur; part of crossing |
-| 5       | Passenger | 1, 8, 9          | Passenger trunk; part of crossing |
-| 6       | Passenger | 2, 9, 10         | Passenger trunk; part of crossing & merge |
-| 7       | Freight   | 3, 4, 11         | Freight trunk merge |
+| 4       | Freight   | 3                | Freight spur; part of crossing |
+| 5       | Passenger | 8, 9, 1          | Passenger trunk; part of crossing |
+| 6       | Passenger | 2                | Passenger trunk; part of crossing & merge |
+| 7       | Freight   | 3, 11            | Freight trunk merge |
 | 8       | Passenger | 5                | Passenger exit (east) |
-| 9       | Passenger | 5, 6             | Passenger merge/diverge |
-| 10      | Passenger | 6                | Passenger entry (north) |
+| 9       | Passenger | 5, 6             | Passenger diverge (5→9) and northbound approach (9→6) |
+| 10      | Passenger | 6                | Passenger entry (north) feeding merge at 6 |
 | 11      | Freight   | 7                | Freight exit (east) |
 
 Entry/exit rules from the brief:
@@ -34,15 +53,15 @@ Entry/exit rules from the brief:
 - If both passenger and freight request the mutex in the same tick, the passenger move fires. Same-type clashes release no more than one train per tick.  
 - Crossing arbitration happens before regular target-based conflict handling.
 
-**Fair merges (implemented in code)**  
-- Sections 6 and 9 each own a logical token (`Merge6_turn`, `Merge9_turn`) that rotates across contending trains (round robin). This prevents starvation when two independent approaches want the same section.  
+- **Fair merges (implemented in code)**  
+- Sections 6 and 7 each own a logical token (`Merge6_turn`, `Merge7_turn`) that rotates across contending trains (round robin). This prevents starvation when independent approaches want the same section.  
 - Crossing still uses passenger-first rather than the fairness token.
 
 **Exit-on-next-move**  
-- Arrival at the destination section arms an `exit_ready` token. On the next `moveTrains` call the train consumes `exit_ready`, frees its section, and leaves the corridor (reporting `-1` via `getTrain`).
+- Arrival at an exit section (`{2,3,4,8,9,11}`) arms an `exit_ready` token. On the next `moveTrains` call the train consumes the token, frees its section, and leaves the corridor. Destinations that are not legal exits remain occupied.
 
 **Deadlock signalling**  
-- When a tick produces zero enabled moves while trains remain inside, the system records a “no progress” state. Phase 3 will categorise this as block/deadlock and trigger a recovery strategy.
+- Each `moveTrains` call reports an `Outcome` stored in `getLastOutcome()`. “Deadlock” is raised when at least one train requested movement but progress was impossible because **non-exit** occupants blocked the path. If a path is held only by a train already marked to exit, the result is reported as “Blocked” instead.
 
 ## 3. Petri-net ingredients
 
@@ -88,13 +107,13 @@ Routing uses a precomputed BFS from each section to every reachable destination 
    - Exit on next move verified (`MovePhase1_Test`, `RoutingRules_Test`, etc.).
 2. **Phase 2 (crossing + fairness)**  
    - Passenger beats freight at crossing; freight only moves when passenger absent/cleared (`PriorityAndCrossing_Test`, `CrossingConflict_Test`).  
-   - Round-robin merge scheduling at section 6 (`FairMerge_Test`).  
+   - Round-robin merge scheduling at sections 6 and 7 (`FairMerge_Test`).  
    - All prior tests kept green.
 3. **Phase 3 (deadlock)**  
-   - Detect stalemates (e.g., opposing freights on 3↔7↔11, passengers on 5↔9↔6).  
-   - Resolve and classify outcomes (“deadlock”, “block”), with targeted JUnit coverage.
+   - Detect stalemates (e.g., opposing freights on 3↔7↔11).  
+   - Classification verified via `DeadlockHandling_Test` (`getLastOutcome()` returns DEADLOCK/BLOCKED/PROGRESS).
 
 ## 6. Next actions
 1. Export updated Petri-net diagrams (full map, crossing inset, merge fairness inset) to `docs/petri-net-v2.pdf`.  
-2. Phase 3: implement deadlock detection/resolution logic plus matching tests.  
-3. Document the deadlock policy in these notes and extend progress log with verification steps.
+2. Phase 4: add deadlock-resolution notes to the PDF caption and ensure README/submission instructions are up to date.  
+3. Final verification sweep (all tests + manual sanity) before submission.
